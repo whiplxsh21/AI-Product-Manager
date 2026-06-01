@@ -1,0 +1,510 @@
+import json
+import threading
+import time
+
+import streamlit as st
+
+from config import config
+from database import create_tables
+import services.project_service as svc
+
+create_tables()
+
+st.set_page_config(page_title="PM Pilot", layout="wide")
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+STATUS_COLORS = {
+    "idle": "#6b7280",
+    "running": "#3b82f6",
+    "awaiting_approval": "#f59e0b",
+    "complete": "#10b981",
+    "failed": "#ef4444",
+}
+
+STAGE_COLORS = {
+    "pending": "#6b7280",
+    "running": "#3b82f6",
+    "complete": "#10b981",
+    "failed": "#ef4444",
+    "awaiting": "#f59e0b",
+}
+
+STAGE_LABELS = {
+    "ingestion": "Ingestion",
+    "framework": "Framework Analysis",
+    "checkpoint": "Approval Gate",
+    "prd": "PRD Generation",
+    "bdd": "BDD Stories",
+    "jira_format": "Jira Export",
+    "wireframe": "Wireframe Diagram",
+    "ux_flow": "UX Flow",
+}
+
+
+def _status_badge(status: str, colors: dict) -> str:
+    color = colors.get(status, "#6b7280")
+    return f'<span style="background:{color};color:white;padding:2px 10px;border-radius:12px;font-size:0.8em;font-weight:600">{status.replace("_", " ").title()}</span>'
+
+
+def _fmt_date(dt) -> str:
+    if dt is None:
+        return "—"
+    return dt.strftime("%b %d, %Y")
+
+
+# ── Sidebar Navigation ────────────────────────────────────────────────────────
+# Buttons (not a radio) because st.sidebar.radio without a key caches its widget
+# value across reruns and clobbers session_state.page set by in-page buttons —
+# that was the cause of "every click bounces me to home".
+
+if "page" not in st.session_state:
+    st.session_state.page = "Projects"
+
+has_project = bool(st.session_state.get("selected_project_id"))
+pages = ["Projects", "New Project"] + (["Project Detail", "View Results"] if has_project else [])
+
+# If the previously-selected page is no longer reachable (e.g. project deleted),
+# fall back to Projects so nothing renders against missing context.
+if st.session_state.page not in pages:
+    st.session_state.page = "Projects"
+
+st.sidebar.title("PM Pilot")
+for _p in pages:
+    if st.sidebar.button(
+        _p,
+        key=f"nav_{_p}",
+        use_container_width=True,
+        type="primary" if _p == st.session_state.page else "secondary",
+    ):
+        st.session_state.page = _p
+        st.rerun()
+
+# Show context for which project is active
+if has_project:
+    _selected = svc.get_project(st.session_state.selected_project_id)
+    if _selected:
+        st.sidebar.caption(f"Project · **{_selected.name}**")
+
+page = st.session_state.page
+
+
+# ── Page: Projects ────────────────────────────────────────────────────────────
+
+if page == "Projects":
+    st.title("Your Projects")
+    projects = svc.get_all_projects()
+
+    if not projects:
+        st.info("No projects yet. Create one to get started.")
+    else:
+        for project in projects:
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([3, 2, 1])
+                with c1:
+                    st.markdown(f"**{project.name}**")
+                    if project.description:
+                        st.caption(project.description)
+                with c2:
+                    st.markdown(_status_badge(project.status, STATUS_COLORS), unsafe_allow_html=True)
+                    st.caption(_fmt_date(project.created_at))
+                with c3:
+                    if st.button("Open →", key=f"open_{project.id}"):
+                        st.session_state.selected_project_id = project.id
+                        st.session_state.page = "Project Detail"
+                        st.session_state.pop("run_id", None)
+                        st.rerun()
+
+
+# ── Page: New Project ─────────────────────────────────────────────────────────
+
+elif page == "New Project":
+    st.title("New Project")
+    with st.form("new_project_form"):
+        name = st.text_input("Project name *")
+        description = st.text_area("Description (optional)")
+        submitted = st.form_submit_button("Create Project")
+
+    if submitted:
+        if not name.strip():
+            st.error("Project name is required.")
+        else:
+            project = svc.create_project(name.strip(), description.strip() or None)
+            st.session_state.selected_project_id = project.id
+            st.session_state.page = "Project Detail"
+            st.session_state.pop("run_id", None)
+            st.rerun()
+
+
+# ── Page: Project Detail ──────────────────────────────────────────────────────
+
+elif page == "Project Detail":
+    project_id = st.session_state.get("selected_project_id")
+    if not project_id:
+        st.error("No project selected.")
+        st.stop()
+
+    project = svc.get_project(project_id)
+    if not project:
+        st.error("Project not found.")
+        st.stop()
+
+    st.title(project.name)
+    st.markdown(_status_badge(project.status, STATUS_COLORS), unsafe_allow_html=True)
+    st.divider()
+
+    _FILE_TYPE_COLORS = {
+        "transcript": "#6366f1",
+        "docx": "#6366f1",
+        "pdf": "#f59e0b",
+        "pptx": "#f59e0b",
+        "image": "#10b981",
+    }
+
+    # ── Meeting Materials ───────────────────────────────────────────────────────
+    st.subheader("Meeting Materials")
+
+    uploaded_files = st.file_uploader(
+        "Upload files",
+        type=["txt", "md", "docx", "pdf", "pptx", "png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        key=f"uploader_{project_id}",
+    )
+    if uploaded_files:
+        existing_docs = svc.get_documents(project_id)
+        existing_names = {d.filename for d in existing_docs}
+        new_files = [uf for uf in uploaded_files if uf.name not in existing_names]
+
+        if new_files:
+            status_msg = st.empty()
+            progress_bar = st.progress(0)
+            failed = []
+
+            for i, uf in enumerate(new_files):
+                status_msg.info(f"Uploading **{uf.name}** ({i + 1}/{len(new_files)})…")
+                try:
+                    svc.save_document(project_id, uf.name, uf.read())
+                except Exception as e:
+                    failed.append((uf.name, str(e)))
+                progress_bar.progress((i + 1) / len(new_files))
+
+            progress_bar.empty()
+            if failed:
+                status_msg.error(f"Failed to save: {', '.join(n for n, _ in failed)}")
+                time.sleep(2)
+            else:
+                status_msg.success(f"{len(new_files)} file(s) uploaded successfully.")
+                time.sleep(0.8)
+
+            st.rerun()
+
+    docs = svc.get_documents(project_id)
+    if docs:
+        for doc in docs:
+            dc1, dc2, dc3 = st.columns([3, 1, 1])
+            with dc1:
+                st.text(doc.filename)
+            with dc2:
+                st.markdown(_status_badge(doc.file_type, _FILE_TYPE_COLORS),
+                            unsafe_allow_html=True)
+            with dc3:
+                if st.button("🗑", key=f"del_{doc.id}"):
+                    svc.delete_document(doc.id)
+                    st.rerun()
+    else:
+        st.caption("No files uploaded yet.")
+
+    st.divider()
+
+    is_busy = project.status in ("running", "awaiting_approval")
+
+    # ── Input Workspace ─────────────────────────────────────────────────────────
+    st.subheader("Input Workspace")
+    st.caption("Describe the PRD you want from these materials. Each generation is saved below.")
+
+    if not docs:
+        st.info("Upload at least one material above to generate a PRD.")
+    else:
+        with st.form("input_workspace"):
+            title = st.text_input("Requirement title *",
+                                  placeholder="Example: NPI Milestones Historical View")
+            details = st.text_area(
+                "Requirement details",
+                placeholder="Describe what should be built, who needs it, expected behavior, "
+                            "which materials to focus on, and the kind of PRD you want.",
+                height=120,
+            )
+            persona = st.text_input("Persona override (optional)",
+                                    placeholder="Example: release manager")
+            style = st.selectbox("Output style",
+                                 ["Plain English", "Technical", "Concise", "Detailed"])
+            doc_labels = {f"{d.filename}  ·  {d.file_type}": d.id for d in docs}
+            selected_labels = st.multiselect("Materials to consider",
+                                             list(doc_labels.keys()),
+                                             default=list(doc_labels.keys()))
+            submitted = st.form_submit_button("✦ Generate PRD", type="primary",
+                                              disabled=is_busy)
+
+        if submitted:
+            if not title.strip():
+                st.error("Requirement title is required.")
+            elif not selected_labels:
+                st.error("Select at least one material.")
+            else:
+                selected_ids = [doc_labels[l] for l in selected_labels]
+                cfg = dict(title=title.strip(),
+                           requirement_details=details.strip() or None,
+                           persona_override=persona.strip() or None,
+                           output_style=style,
+                           document_ids=selected_ids)
+
+                def _run_in_bg(c=cfg):
+                    svc.run_pipeline(project_id, **c)
+
+                threading.Thread(target=_run_in_bg, daemon=True).start()
+                time.sleep(0.6)
+                st.rerun()
+
+    # ── Active run status ────────────────────────────────────────────────────────
+    project = svc.get_project(project_id)
+    active_run = svc.get_latest_run(project_id)
+
+    if active_run and project.status in ("running", "awaiting_approval", "failed"):
+        st.divider()
+        st.subheader("Generation Progress")
+        st.caption(f"**{active_run.title or 'Untitled PRD'}**")
+
+        stage_statuses = active_run.stage_statuses or {}
+        for stage_key, label in STAGE_LABELS.items():
+            status = stage_statuses.get(stage_key, "pending")
+            rc1, rc2 = st.columns([3, 2])
+            rc1.text(label)
+            rc2.markdown(_status_badge(status, STAGE_COLORS), unsafe_allow_html=True)
+
+        if project.status == "running":
+            current_label = STAGE_LABELS.get(active_run.current_stage, "Processing")
+            st.info(f"⚙ Running: **{current_label}**…")
+            time.sleep(2)
+            st.rerun()
+
+        elif project.status == "failed":
+            st.error(f"Pipeline failed: {active_run.error or 'Unknown error'}")
+            st.caption("Adjust your inputs and click Generate PRD to try again.")
+
+        if config.hitl_enabled and project.status == "awaiting_approval":
+            st.warning("⏸ Paused — review the framework before generating the PRD")
+            framework_output = svc.get_output(project_id, active_run.id, "framework")
+            if framework_output:
+                st.json(json.loads(framework_output.content))
+            notes = st.text_area("Notes or corrections for the PRD writer (optional)",
+                                 key="approval_notes")
+            approve_col, reject_col = st.columns(2)
+            with approve_col:
+                if st.button("✓ Approve and Generate PRD", type="primary"):
+                    fw = json.loads(framework_output.content) if framework_output else {}
+                    svc.approve_run(active_run.id, notes, fw)
+                    st.rerun()
+            with reject_col:
+                if st.button("✗ Reject and Discard"):
+                    svc.reject_run(active_run.id, notes)
+                    st.rerun()
+
+    # ── Generations history ───────────────────────────────────────────────────────
+    runs = svc.get_runs(project_id)
+    st.divider()
+    st.subheader("Generated PRDs")
+
+    if not runs:
+        st.caption("No PRDs generated yet.")
+    else:
+        hc1, hc2, hc3, hc4, hc5 = st.columns([3, 2, 2, 2, 1])
+        hc1.markdown("**Title**")
+        hc2.markdown("**Persona**")
+        hc3.markdown("**Generated**")
+        hc4.markdown("**Status**")
+        hc5.markdown("**Open**")
+
+        for r in runs:
+            rstatus = svc.run_display_status(r)
+            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
+            c1.text(r.title or "Untitled PRD")
+            c2.text(r.persona_override or "—")
+            c3.text(r.started_at.strftime("%b %d, %H:%M") if r.started_at else "—")
+            c4.markdown(_status_badge(rstatus, STATUS_COLORS), unsafe_allow_html=True)
+            with c5:
+                if rstatus == "complete":
+                    if st.button("→", key=f"view_{r.id}"):
+                        st.session_state.view_run_id = r.id
+                        st.session_state.page = "View Results"
+                        st.rerun()
+
+
+# ── Page: View Results ────────────────────────────────────────────────────────
+
+elif page == "View Results":
+    project_id = st.session_state.get("selected_project_id")
+    if not project_id:
+        st.error("No project selected.")
+        st.stop()
+
+    project = svc.get_project(project_id)
+    if not project:
+        st.error("Project not found.")
+        st.stop()
+
+    view_run_id = st.session_state.get("view_run_id")
+    run = svc.get_run_status(view_run_id) if view_run_id else None
+    if run is None:
+        run = svc.get_latest_run(project_id)
+    if not run:
+        st.info("No pipeline run found for this project.")
+        st.stop()
+
+    # Back-button row
+    back_col, _ = st.columns([1, 5])
+    with back_col:
+        if st.button("← Back to project", key="back_to_project", use_container_width=True):
+            st.session_state.page = "Project Detail"
+            st.rerun()
+
+    st.title(run.title or "Results")
+
+    # ── Generation metadata ──────────────────────────────────────────────────────
+    m1, m2 = st.columns(2)
+    with m1:
+        st.markdown(f"**Persona:** {run.persona_override or '—'}")
+        st.markdown(f"**Requirement title:** {run.title or '—'}")
+        st.markdown(f"**Output style:** {run.output_style or '—'}")
+    with m2:
+        gen_at = run.completed_at or run.started_at
+        st.markdown(f"**Generated at:** {gen_at.strftime('%b %d, %Y %H:%M') if gen_at else '—'}")
+        st.markdown(f"**Method:** {run.method or 'AI'}")
+    if run.requirement_details:
+        with st.expander("Requirement details"):
+            st.write(run.requirement_details)
+
+    # ── Regenerate visuals action ───────────────────────────────────────────────
+    is_busy = project.status in ("running", "awaiting_approval")
+    rc1, rc2 = st.columns([2, 5])
+    with rc1:
+        if st.button("✦ Regenerate Wireframe + UX Flow",
+                     key="regen_visuals",
+                     disabled=is_busy,
+                     use_container_width=True,
+                     type="primary"):
+            def _regen_in_bg(rid=run.id):
+                svc.regenerate_visuals(rid)
+
+            threading.Thread(target=_regen_in_bg, daemon=True).start()
+            time.sleep(0.6)
+            st.rerun()
+    with rc2:
+        st.caption("Re-runs only the wireframe + UX flow nodes against this PRD's "
+                   "cached framework JSON — no new framework or PRD generation.")
+
+    # Poll while a regeneration (or any pipeline) is in progress so the new
+    # SVGs appear automatically without the user having to refresh.
+    if is_busy:
+        current_label = STAGE_LABELS.get(run.current_stage, "Processing")
+        st.info(f"⚙ Running: **{current_label}**…")
+        time.sleep(2)
+        st.rerun()
+
+    if project.status == "failed" and run.error:
+        st.error(f"Last run failed: {run.error}")
+
+    st.divider()
+
+    prd_output = svc.get_output(project_id, run.id, "prd")
+    bdd_output = svc.get_output(project_id, run.id, "bdd")
+    jira_output = svc.get_output(project_id, run.id, "jira_format")
+    wireframe_output = svc.get_output(project_id, run.id, "wireframe")
+    ux_flow_output = svc.get_output(project_id, run.id, "ux_flow")
+    framework_output = svc.get_output(project_id, run.id, "framework")
+    ingestion_output = svc.get_output(project_id, run.id, "ingestion")
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["PRD", "BDD Stories", "Jira Export", "Wireframe", "UX Flow"]
+    )
+
+    with tab1:
+        if prd_output:
+            st.download_button(
+                "⬇ Download PRD (.md)",
+                data=prd_output.content,
+                file_name="prd.md",
+                mime="text/markdown",
+            )
+            st.divider()
+            st.markdown(prd_output.content)
+        else:
+            st.info("PRD not yet generated.")
+
+    with tab2:
+        if bdd_output:
+            st.download_button(
+                "⬇ Download BDD Stories (.md)",
+                data=bdd_output.content,
+                file_name="bdd_stories.md",
+                mime="text/markdown",
+            )
+            st.divider()
+            st.markdown(bdd_output.content)
+        else:
+            st.info("BDD stories not yet generated.")
+
+    with tab3:
+        if jira_output:
+            st.download_button(
+                "⬇ Download Jira Export (.json)",
+                data=jira_output.content,
+                file_name="jira_export.json",
+                mime="application/json",
+            )
+            st.divider()
+            st.json(json.loads(jira_output.content))
+            st.info("Jira push will be available in a future version.")
+        else:
+            st.info("Jira export not yet generated.")
+
+    with tab4:
+        st.caption("Drag the downloaded SVG into a Figma frame, or use File → Import.")
+        if wireframe_output:
+            st.download_button(
+                "⬇ Download Wireframe (.svg)",
+                data=wireframe_output.content,
+                file_name="wireframe.svg",
+                mime="image/svg+xml",
+            )
+            st.divider()
+            st.components.v1.html(wireframe_output.content, height=700, scrolling=True)
+        else:
+            st.info("Wireframe not yet generated.")
+
+    with tab5:
+        st.caption("Drag the downloaded SVG into a Figma frame, or use File → Import.")
+        if ux_flow_output:
+            st.download_button(
+                "⬇ Download UX Flow (.svg)",
+                data=ux_flow_output.content,
+                file_name="ux_flow.svg",
+                mime="image/svg+xml",
+            )
+            st.divider()
+            st.components.v1.html(ux_flow_output.content, height=700, scrolling=True)
+        else:
+            st.info("UX flow not yet generated.")
+
+    st.divider()
+
+    with st.expander("Raw Framework JSON (Node 2 output)"):
+        if framework_output:
+            st.json(json.loads(framework_output.content))
+        else:
+            st.caption("Not available.")
+
+    with st.expander("Cleaned Meeting Document (Node 1 output)"):
+        if ingestion_output:
+            st.text(ingestion_output.content)
+        else:
+            st.caption("Not available.")
