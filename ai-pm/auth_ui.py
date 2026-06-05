@@ -3,11 +3,37 @@
 When AUTH_ENABLED is false the gate is a no-op so the app runs open locally.
 When true, ensure_authenticated() blocks the app until the user signs in.
 """
-import streamlit as st
+import time
+from datetime import datetime, timedelta
 
+import streamlit as st
+import extra_streamlit_components as stx
+
+import crypto
 from config import config
 import services.auth_service as auth
 import services.email_service as email_svc
+
+# Browser cookie used to keep users logged in across page refreshes (Streamlit
+# session_state is wiped on refresh). The cookie holds a Fernet-encrypted token,
+# not the raw user id, so it can't be forged without APP_SECRET_KEY.
+_COOKIE_NAME = "pmp_session"
+_COOKIE_TTL_DAYS = 7
+
+
+def _cookie_manager() -> "stx.CookieManager":
+    """One CookieManager per script run, stashed so other functions in the same
+    run (e.g. logout) reuse it instead of instantiating a duplicate widget."""
+    if "_cm" not in st.session_state:
+        st.session_state["_cm"] = stx.CookieManager(key="pmp_cookies")
+    return st.session_state["_cm"]
+
+
+def _write_session_cookie(cm, user_id: str) -> None:
+    exp = time.time() + _COOKIE_TTL_DAYS * 86400
+    token = crypto.encrypt_json({"uid": user_id, "exp": exp})
+    cm.set(_COOKIE_NAME, token,
+           expires_at=datetime.now() + timedelta(days=_COOKIE_TTL_DAYS))
 
 
 def current_user() -> dict | None:
@@ -36,7 +62,7 @@ def can_access(project) -> bool:
     return project.owner_id in (None, user["id"])
 
 
-def _login(user) -> None:
+def _login(user, cm=None) -> None:
     st.session_state.auth_user = {
         "id": user.id,
         "username": user.username,
@@ -44,9 +70,18 @@ def _login(user) -> None:
         "role": user.role,
     }
     st.session_state.llm_settings = auth.get_llm_settings(user.id)
+    # Persist to a cookie on a fresh sign-in (not when restoring from one).
+    if cm is not None and config.auth_enabled:
+        _write_session_cookie(cm, user.id)
 
 
 def logout() -> None:
+    cm = st.session_state.get("_cm")
+    if cm is not None:
+        try:
+            cm.delete(_COOKIE_NAME)
+        except Exception:
+            pass
     for k in ("auth_user", "llm_settings", "selected_project_id", "view_run_id", "run_id"):
         st.session_state.pop(k, None)
 
@@ -85,7 +120,7 @@ def _is_valid_email(email: str) -> bool:
     return "@" in email and "." in email.split("@")[-1] and len(email) >= 5
 
 
-def _render_login() -> None:
+def _render_login(cm=None) -> None:
     st.title("PM Pilot")
     st.caption("Sign in to access your projects.")
 
@@ -103,7 +138,7 @@ def _render_login() -> None:
         if submitted:
             user = auth.authenticate(identifier, password)
             if user:
-                _login(user)
+                _login(user, cm=cm)
                 st.rerun()
             else:
                 st.error("Invalid username/email or password.")
@@ -130,7 +165,7 @@ def _render_login() -> None:
                     if err:
                         st.error(err)
                     else:
-                        _login(user)
+                        _login(user, cm=cm)
                         st.rerun()
 
     with tab_map["Forgot password"]:
@@ -157,10 +192,13 @@ def _render_login() -> None:
 
 
 def ensure_authenticated() -> None:
-    """Block the app behind a login screen when auth is enabled. Returns
-    (does nothing) once the user is authenticated or when auth is disabled."""
+    """Block the app behind a login screen when auth is enabled. Restores a
+    prior session from the browser cookie so a page refresh doesn't log the
+    user out. No-op when auth is disabled."""
     if not config.auth_enabled:
         return
+
+    cm = _cookie_manager()
 
     params = st.query_params
     if "reset_token" in params and not current_user():
@@ -170,5 +208,26 @@ def ensure_authenticated() -> None:
     if current_user():
         return
 
-    _render_login()
+    # Try to restore a session from the cookie. On the first run after a refresh
+    # the component may not have returned cookies yet (get_all() is None) — wait
+    # a couple of reruns (the component triggers one when it loads) before giving
+    # up, so we don't flash the login screen at an already-logged-in user.
+    cookies = cm.get_all()
+    if cookies is None:
+        if st.session_state.get("_cookie_wait", 0) < 3:
+            st.session_state["_cookie_wait"] = st.session_state.get("_cookie_wait", 0) + 1
+            st.stop()
+    st.session_state["_cookie_wait"] = 0
+
+    token = (cookies or {}).get(_COOKIE_NAME)
+    if token:
+        data = crypto.decrypt_json(token)
+        uid, exp = data.get("uid"), data.get("exp", 0)
+        if uid and exp > time.time():
+            user = auth.get_user(uid)
+            if user:
+                _login(user)  # restore only; cookie already set
+                return
+
+    _render_login(cm)
     st.stop()

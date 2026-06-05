@@ -10,10 +10,21 @@ import services.project_service as svc
 import services.auth_service as auth
 import auth_ui
 
-create_tables()
-auth.seed_admin()
-
 st.set_page_config(page_title="PM Pilot", layout="wide")
+
+
+@st.cache_resource
+def _bootstrap():
+    # Runs once per server process (shared across all sessions/reruns). Without
+    # this, create_all() + seed_admin() fired on every page navigation, doing
+    # several round trips to the remote DB each time — the main cause of the
+    # 3-5s lag between pages.
+    create_tables()
+    auth.seed_admin()
+    return True
+
+
+_bootstrap()
 
 # Block the app behind a login screen when AUTH_ENABLED is true (no-op locally).
 auth_ui.ensure_authenticated()
@@ -558,7 +569,24 @@ elif page == "Settings":
                "provider's default model.")
 
     with st.form("llm_settings_form"):
-        st.markdown("**Provider & models**")
+        st.markdown("**Mode**")
+        mode = st.radio(
+            "Generation mode",
+            ["Free (multi-provider)", "Paid (OpenAI only)"],
+            index=1 if saved.get("paid") else 0,
+            help="Paid uses OpenAI only (gpt-5.4-mini by default) for every step and "
+                 "ignores the free-mode providers below. Free uses the providers/keys below.",
+        )
+        paid_model = st.text_input(
+            "Paid model (OpenAI)",
+            value=saved.get("paid_model", "") or "gpt-5.4-mini",
+            help="Only used in Paid mode. Default is gpt-5.4-mini — change only if you "
+                 "specifically want a different OpenAI model.",
+        )
+
+        st.divider()
+        st.markdown("**Free-mode providers & models** "
+                    "_(ignored when Paid mode is selected)_")
         provider = st.selectbox("Primary provider", _PROVIDERS,
                                 index=_provider_index(saved.get("llm_provider", "")))
         llm_model = st.text_input("Primary model", value=saved.get("llm_model", ""),
@@ -605,6 +633,8 @@ elif page == "Settings":
     if save_clicked:
         new_settings = dict(saved)  # start from existing so blank secrets persist
         new_settings.update({
+            "paid": mode.startswith("Paid"),
+            "paid_model": paid_model.strip() or "gpt-5.4-mini",
             "llm_provider": provider,
             "llm_model": llm_model.strip(),
             "cleaning_mode": cleaning_mode,

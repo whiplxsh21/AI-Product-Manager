@@ -19,6 +19,7 @@ python-pptx
 python-multipart
 requests
 # ── Hosting / auth ───────────────────────────────────────────────
-psycopg2-binary        # PostgreSQL driver (Neon). Not needed for local SQLite.
-bcrypt                 # password hashing
-cryptography           # Fernet encryption for per-user API keys at rest
+psycopg2-binary           # PostgreSQL driver (Neon). Not needed for local SQLite.
+bcrypt                    # password hashing
+cryptography              # Fernet encryption for per-user API keys at rest
+extra-streamlit-components # browser cookie manager → keeps users logged in across refresh

@@ -2,10 +2,18 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from config import config
 
-engine = create_engine(
-    config.database_url,
-    connect_args={"check_same_thread": False} if "sqlite" in config.database_url else {}
+_is_sqlite = "sqlite" in config.database_url
+
+# For remote Postgres (Neon), connections can be dropped when the DB
+# auto-suspends or after idle timeouts. pool_pre_ping checks a connection is
+# alive before use (avoids "server closed the connection" errors), and
+# pool_recycle drops connections older than 5 min so we don't reuse stale ones.
+_engine_kwargs = (
+    {"connect_args": {"check_same_thread": False}}
+    if _is_sqlite
+    else {"pool_pre_ping": True, "pool_recycle": 300}
 )
+engine = create_engine(config.database_url, **_engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -52,5 +60,17 @@ def _migrate():
 
 def create_tables():
     from models import Base as ModelBase
-    ModelBase.metadata.create_all(bind=engine)
-    _migrate()
+    from sqlalchemy.exc import IntegrityError, ProgrammingError, OperationalError
+
+    # create_all(checkfirst=True) skips existing tables, but on Postgres two app
+    # instances booting at once can race: both pass the existence check, then one
+    # CREATE hits a unique violation on the system catalog. Tables get created
+    # either way, so tolerate the race instead of crashing on first boot.
+    try:
+        ModelBase.metadata.create_all(bind=engine, checkfirst=True)
+    except (IntegrityError, ProgrammingError, OperationalError):
+        pass
+    try:
+        _migrate()
+    except (IntegrityError, ProgrammingError, OperationalError):
+        pass

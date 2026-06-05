@@ -22,7 +22,7 @@ LLM_FIELDS = (
     "vision_provider", "vision_model", "ingestion_provider", "ingestion_model",
     "groq_api_key", "openai_api_key", "openai_project",
     "anthropic_api_key", "gemini_api_key",
-    "paid", "cleaning_mode",
+    "paid", "paid_model", "cleaning_mode",
 )
 
 _override: contextvars.ContextVar[dict | None] = contextvars.ContextVar(

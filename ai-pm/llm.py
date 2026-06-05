@@ -119,11 +119,14 @@ def _resolve(role: str, provider: str, model: str) -> tuple[str, str]:
     return provider, model
 
 
-PAID_MODEL = "gpt-5.4-mini"   # the only paid model used; do not introduce others
+PAID_MODEL = "gpt-5.4-mini"   # default paid model; users may override in Settings
 
 
 def _build_paid_model(temperature: float) -> BaseChatModel:
-    return _build_model("openai", PAID_MODEL, temperature)
+    # Paid mode always uses OpenAI. Default model is gpt-5.4-mini; a user may
+    # override it in Settings, but blank always falls back to gpt-5.4-mini.
+    model = effective_config().paid_model or PAID_MODEL
+    return _build_model("openai", model, temperature)
 
 
 def get_llm(temperature: float = 0.2) -> BaseChatModel:

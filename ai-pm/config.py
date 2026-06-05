@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     ingestion_provider: str = ""
     ingestion_model: str = ""
     cleaning_mode: str = "local"      # local (regex, no LLM) | llm (LLM, regex fallback)
-    paid: bool = False                # True → every LLM task uses OpenAI gpt-5.4-mini
+    paid: bool = False                # True → every LLM task uses OpenAI (paid_model)
+    paid_model: str = ""              # OpenAI model for paid mode; blank → gpt-5.4-mini
     openai_api_key: str = ""
     openai_project: str = ""          # OpenAI project ID/name for billing scope
     anthropic_api_key: str = ""
