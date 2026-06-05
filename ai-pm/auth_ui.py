@@ -21,12 +21,11 @@ _COOKIE_NAME = "pmp_session"
 _COOKIE_TTL_DAYS = 7
 
 
-def _cookie_manager() -> "stx.CookieManager":
-    """One CookieManager per script run, stashed so other functions in the same
-    run (e.g. logout) reuse it instead of instantiating a duplicate widget."""
-    if "_cm" not in st.session_state:
-        st.session_state["_cm"] = stx.CookieManager(key="pmp_cookies")
-    return st.session_state["_cm"]
+def _make_cookie_manager() -> "stx.CookieManager":
+    """Create a fresh CookieManager each run. The component must re-render on
+    every run to communicate with the browser; caching the instance across runs
+    leaves it stale (reads return nothing, writes don't land)."""
+    return stx.CookieManager(key="pmp_cookies")
 
 
 def _write_session_cookie(cm, user_id: str) -> None:
@@ -62,7 +61,10 @@ def can_access(project) -> bool:
     return project.owner_id in (None, user["id"])
 
 
-def _login(user, cm=None) -> None:
+def _login(user) -> None:
+    # Only sets session state. The cookie is written by ensure_authenticated()
+    # on the next run (a clean render pass), because writing it here and then
+    # immediately rerunning drops the browser-side write.
     st.session_state.auth_user = {
         "id": user.id,
         "username": user.username,
@@ -70,19 +72,15 @@ def _login(user, cm=None) -> None:
         "role": user.role,
     }
     st.session_state.llm_settings = auth.get_llm_settings(user.id)
-    # Persist to a cookie on a fresh sign-in (not when restoring from one).
-    if cm is not None and config.auth_enabled:
-        _write_session_cookie(cm, user.id)
+    st.session_state.pop("_cookie_written", None)  # trigger a fresh cookie write
 
 
 def logout() -> None:
-    cm = st.session_state.get("_cm")
-    if cm is not None:
-        try:
-            cm.delete(_COOKIE_NAME)
-        except Exception:
-            pass
-    for k in ("auth_user", "llm_settings", "selected_project_id", "view_run_id", "run_id"):
+    # Defer cookie deletion to the next run's ensure_authenticated(), where it
+    # runs on a clean pass (deleting + immediately rerunning drops the write).
+    st.session_state["_do_logout"] = True
+    for k in ("auth_user", "llm_settings", "selected_project_id",
+              "view_run_id", "run_id", "_cookie_written"):
         st.session_state.pop(k, None)
 
 
@@ -120,7 +118,7 @@ def _is_valid_email(email: str) -> bool:
     return "@" in email and "." in email.split("@")[-1] and len(email) >= 5
 
 
-def _render_login(cm=None) -> None:
+def _render_login() -> None:
     st.title("PM Pilot")
     st.caption("Sign in to access your projects.")
 
@@ -138,7 +136,7 @@ def _render_login(cm=None) -> None:
         if submitted:
             user = auth.authenticate(identifier, password)
             if user:
-                _login(user, cm=cm)
+                _login(user)
                 st.rerun()
             else:
                 st.error("Invalid username/email or password.")
@@ -165,7 +163,7 @@ def _render_login(cm=None) -> None:
                     if err:
                         st.error(err)
                     else:
-                        _login(user, cm=cm)
+                        _login(user)
                         st.rerun()
 
     with tab_map["Forgot password"]:
@@ -194,24 +192,41 @@ def _render_login(cm=None) -> None:
 def ensure_authenticated() -> None:
     """Block the app behind a login screen when auth is enabled. Restores a
     prior session from the browser cookie so a page refresh doesn't log the
-    user out. No-op when auth is disabled."""
+    user out. No-op when auth is disabled.
+
+    Each script run performs at most ONE cookie operation (read, write, or
+    delete) — mixing them in a single run conflicts in the cookie component."""
     if not config.auth_enabled:
         return
 
-    cm = _cookie_manager()
+    cm = _make_cookie_manager()
+
+    # 1. Pending logout: delete the cookie on this clean pass, then show login.
+    if st.session_state.pop("_do_logout", False):
+        try:
+            cm.delete(_COOKIE_NAME)
+        except Exception:
+            pass
+        _render_login()
+        st.stop()
 
     params = st.query_params
     if "reset_token" in params and not current_user():
         _render_reset(params["reset_token"])
         st.stop()
 
+    # 2. Logged in this session: write the cookie once (on a normal render pass,
+    #    not immediately followed by a rerun, so the browser actually stores it).
     if current_user():
+        if not st.session_state.get("_cookie_written"):
+            _write_session_cookie(cm, current_user()["id"])
+            st.session_state["_cookie_written"] = True
         return
 
-    # Try to restore a session from the cookie. On the first run after a refresh
-    # the component may not have returned cookies yet (get_all() is None) — wait
-    # a couple of reruns (the component triggers one when it loads) before giving
-    # up, so we don't flash the login screen at an already-logged-in user.
+    # 3. Not logged in: try to restore from the cookie. On the first run after a
+    #    refresh the component may not have returned cookies yet (get_all() is
+    #    None) — wait a couple of reruns (the component triggers one when it
+    #    loads) before falling back to the login screen.
     cookies = cm.get_all()
     if cookies is None:
         if st.session_state.get("_cookie_wait", 0) < 3:
@@ -226,8 +241,10 @@ def ensure_authenticated() -> None:
         if uid and exp > time.time():
             user = auth.get_user(uid)
             if user:
-                _login(user)  # restore only; cookie already set
+                _login(user)
+                # Cookie already exists — don't rewrite it next run.
+                st.session_state["_cookie_written"] = True
                 return
 
-    _render_login(cm)
+    _render_login()
     st.stop()
