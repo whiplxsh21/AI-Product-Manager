@@ -28,12 +28,25 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./aipm.db"
 
     # Storage
-    storage_backend: str = "local"
+    storage_backend: str = "local"   # local | s3 | db  (db = blobs in the SQL database)
     storage_local_path: str = "./storage"
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_s3_bucket: str = ""
     aws_s3_region: str = ""
+
+    # Auth / accounts
+    auth_enabled: bool = False        # True → login required (hosted deploy)
+    allow_registration: bool = True   # True → show the "Create account" tab on login
+    app_secret_key: str = ""          # Fernet key for encrypting per-user LLM keys at rest
+    app_base_url: str = ""            # public URL, used to build password-reset links
+    seed_admin_username: str = ""     # optional: auto-create this admin user on startup
+    seed_admin_email: str = ""
+    seed_admin_password: str = ""
+
+    # Email (password reset) — Resend
+    resend_api_key: str = ""
+    email_from: str = "PM Pilot <onboarding@resend.dev>"
 
     # Pipeline
     hitl_enabled: bool = False

@@ -1,6 +1,35 @@
+# ── Project notes kept out of the repo ──────────────────────────────────────
 CLAUDE.md
-.env
 SESSION_1.md
 SESSION_2.md
+
+# ── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ── Virtual environments ───────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Secrets & environment ───────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# ── Local data (regenerated at runtime — never commit) ──────────────────────
+*.db
+*.sqlite3
+pipeline_checkpoints.db
 storage/
 
+# ── OS / editor cruft ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Note: sample/seed data IS committed on purpose:
+#   SAMPLE PRDs/   ai-pm/SIMULATED TRANSCRIPTS/   ai-pm/discovery meeting data 1/

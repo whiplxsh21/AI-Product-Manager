@@ -2,7 +2,7 @@ import time
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from config import config
+from runtime import effective_config
 
 _TRANSIENT_KEYWORDS = ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED",
                        "rate", "quota", "overloaded", "high demand")
@@ -80,26 +80,27 @@ def invoke_with_fallback(llms: list[BaseChatModel], messages: list[BaseMessage])
 
 
 def _build_model(provider: str, model: str, temperature: float) -> BaseChatModel:
+    cfg = effective_config()
     if provider == "groq":
         from langchain_groq import ChatGroq
-        return ChatGroq(model=model, temperature=temperature, api_key=config.groq_api_key)
+        return ChatGroq(model=model, temperature=temperature, api_key=cfg.groq_api_key)
     elif provider == "openai":
         import os
         from langchain_openai import ChatOpenAI
         # The openai SDK reads OPENAI_PROJECT from the environment; setting it
         # here scopes paid usage to the configured project for billing.
-        if config.openai_project:
-            os.environ["OPENAI_PROJECT"] = config.openai_project
-        return ChatOpenAI(model=model, temperature=temperature, api_key=config.openai_api_key)
+        if cfg.openai_project:
+            os.environ["OPENAI_PROJECT"] = cfg.openai_project
+        return ChatOpenAI(model=model, temperature=temperature, api_key=cfg.openai_api_key)
     elif provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(model=model, temperature=temperature, api_key=config.anthropic_api_key)
+        return ChatAnthropic(model=model, temperature=temperature, api_key=cfg.anthropic_api_key)
     elif provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         # 2.5 models reserve part of the output budget for "thinking"; without a
         # generous max_output_tokens the visible content can come back empty.
         return ChatGoogleGenerativeAI(model=model, temperature=temperature,
-                                      google_api_key=config.gemini_api_key,
+                                      google_api_key=cfg.gemini_api_key,
                                       max_output_tokens=8192)
     elif provider == "ollama":
         from langchain_ollama import ChatOllama
@@ -109,7 +110,7 @@ def _build_model(provider: str, model: str, temperature: float) -> BaseChatModel
 
 
 def _resolve(role: str, provider: str, model: str) -> tuple[str, str]:
-    provider = provider or config.llm_provider
+    provider = provider or effective_config().llm_provider
     if not model:
         defaults = _DEFAULT_MODELS[role]
         if provider not in defaults:
@@ -126,33 +127,37 @@ def _build_paid_model(temperature: float) -> BaseChatModel:
 
 
 def get_llm(temperature: float = 0.2) -> BaseChatModel:
-    if config.paid:
+    cfg = effective_config()
+    if cfg.paid:
         return _build_paid_model(temperature)
-    provider, model = _resolve("main", config.llm_provider, config.llm_model)
+    provider, model = _resolve("main", cfg.llm_provider, cfg.llm_model)
     return _build_model(provider, model, temperature)
 
 
 def get_main_llms(temperature: float = 0.2) -> list[BaseChatModel]:
     """In paid mode: only gpt-5.4-mini. In free mode: primary + configured
     fallback. Used with invoke_with_fallback by the framework + PRD nodes."""
-    if config.paid:
+    cfg = effective_config()
+    if cfg.paid:
         return [_build_paid_model(temperature)]
     chain = [get_llm(temperature)]
-    if config.llm_fallback_provider:
-        provider, model = _resolve("main", config.llm_fallback_provider, config.llm_fallback_model)
+    if cfg.llm_fallback_provider:
+        provider, model = _resolve("main", cfg.llm_fallback_provider, cfg.llm_fallback_model)
         chain.append(_build_model(provider, model, temperature))
     return chain
 
 
 def get_ingestion_llm(temperature: float = 0.0) -> BaseChatModel:
-    if config.paid:
+    cfg = effective_config()
+    if cfg.paid:
         return _build_paid_model(temperature)
-    provider, model = _resolve("light", config.ingestion_provider, config.ingestion_model)
+    provider, model = _resolve("light", cfg.ingestion_provider, cfg.ingestion_model)
     return _build_model(provider, model, temperature)
 
 
 def get_vision_llm(temperature: float = 0.2) -> BaseChatModel:
-    if config.paid:
+    cfg = effective_config()
+    if cfg.paid:
         return _build_paid_model(temperature)
-    provider, model = _resolve("vision", config.vision_provider, config.vision_model)
+    provider, model = _resolve("vision", cfg.vision_provider, cfg.vision_model)
     return _build_model(provider, model, temperature)

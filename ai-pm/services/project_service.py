@@ -3,6 +3,7 @@ from datetime import datetime
 
 from database import SessionLocal
 from models import Document, GeneratedOutput, PipelineRun, Project
+from runtime import set_llm_override
 from storage import get_storage
 
 _FILE_TYPE_MAP = {
@@ -25,10 +26,12 @@ def _detect_file_type(filename: str) -> str:
 
 # ── Projects ──────────────────────────────────────────────────────────────────
 
-def create_project(name: str, description: str | None = None) -> Project:
+def create_project(name: str, description: str | None = None,
+                   owner_id: str | None = None) -> Project:
     db = SessionLocal()
     try:
-        project = Project(id=str(uuid.uuid4()), name=name, description=description)
+        project = Project(id=str(uuid.uuid4()), name=name, description=description,
+                          owner_id=owner_id)
         db.add(project)
         db.commit()
         db.refresh(project)
@@ -37,10 +40,15 @@ def create_project(name: str, description: str | None = None) -> Project:
         db.close()
 
 
-def get_all_projects() -> list[Project]:
+def get_all_projects(owner_id: str | None = None) -> list[Project]:
+    """Return projects, scoped to one owner when owner_id is given. With no
+    owner_id (auth disabled / admin), returns every project."""
     db = SessionLocal()
     try:
-        return db.query(Project).order_by(Project.created_at.desc()).all()
+        q = db.query(Project)
+        if owner_id is not None:
+            q = q.filter_by(owner_id=owner_id)
+        return q.order_by(Project.created_at.desc()).all()
     finally:
         db.close()
 
@@ -118,7 +126,12 @@ def run_pipeline(
     persona_override: str | None = None,
     output_style: str | None = None,
     document_ids: list[str] | None = None,
+    llm_settings: dict | None = None,
 ) -> str:
+    # Runs in a background thread; bind this user's LLM settings to this run so
+    # every node uses their provider/keys/models (falls back to global config).
+    set_llm_override(llm_settings)
+
     from pipeline.graph import compiled_graph
 
     run_id = str(uuid.uuid4())
@@ -259,11 +272,12 @@ def run_display_status(run: PipelineRun) -> str:
     return "pending"
 
 
-def regenerate_visuals(run_id: str) -> None:
+def regenerate_visuals(run_id: str, llm_settings: dict | None = None) -> None:
     """Re-run wireframe + UX flow nodes against an existing run, reusing the
     cached framework JSON and PRD markdown. Lets users iterate on the visuals
     without paying for framework + PRD generation again."""
     import json
+    set_llm_override(llm_settings)
     from pipeline.nodes.wireframe import wireframe_node
     from pipeline.nodes.ux_flow import ux_flow_node
 

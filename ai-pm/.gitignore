@@ -1,8 +1,33 @@
-.env
-*.db
-storage/
+# ── Python ───────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
-*.pyo
-.DS_Store
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ── Virtual environments ───────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Secrets & environment ───────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# ── Local data (regenerated at runtime — never commit) ──────────────────────
+*.db
+*.sqlite3
 pipeline_checkpoints.db
+storage/
+
+# ── OS / editor cruft ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Note: sample/seed data IS committed on purpose:
+#   SIMULATED TRANSCRIPTS/   discovery meeting data 1/

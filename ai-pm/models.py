@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean, LargeBinary
 from sqlalchemy.types import JSON
 from sqlalchemy.orm import relationship
 from database import Base
@@ -10,10 +10,40 @@ def _uuid():
     return str(uuid.uuid4())
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    username = Column(String, nullable=False, unique=True, index=True)
+    email = Column(String, nullable=False, unique=True, index=True)
+    password_hash = Column(String, nullable=False)
+    role = Column(String, default="user")          # user | admin
+    created_at = Column(DateTime, default=datetime.utcnow)
+    # Fernet-encrypted JSON of this user's LLM settings (provider, keys, models).
+    # Never stored in plaintext. See crypto.py.
+    llm_settings_enc = Column(Text, nullable=True)
+    reset_token = Column(String, nullable=True)
+    reset_token_expires = Column(DateTime, nullable=True)
+
+
+class FileBlob(Base):
+    """File contents stored directly in the database (STORAGE_BACKEND=db).
+
+    Avoids needing object storage (S3/R2) for the hosted deployment — uploads
+    are small (transcripts KBs, decks a few MB) and fit comfortably in a row."""
+    __tablename__ = "file_blobs"
+
+    path = Column(String, primary_key=True)        # synthetic key returned by save()
+    project_id = Column(String, index=True, nullable=True)
+    content = Column(LargeBinary, nullable=False)   # BYTEA on Postgres, BLOB on SQLite
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Project(Base):
     __tablename__ = "projects"
 
     id = Column(String, primary_key=True, default=_uuid)
+    owner_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

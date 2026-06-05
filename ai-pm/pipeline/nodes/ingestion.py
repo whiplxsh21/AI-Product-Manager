@@ -6,7 +6,7 @@ from datetime import datetime
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from config import config
+from runtime import effective_config
 from database import SessionLocal
 from llm import get_ingestion_llm, get_vision_llm, invoke_with_retry
 from models import Document, GeneratedOutput, PipelineRun, Project
@@ -69,7 +69,7 @@ def _llm_clean(text: str, visual_filenames: list[str]) -> str:
 
 
 def _clean_text(text: str, visual_filenames: list[str]) -> str:
-    if config.cleaning_mode == "local":
+    if effective_config().cleaning_mode == "local":
         return _regex_clean(text)
     # llm mode: clean with the light model, falling back to regex if it is exhausted
     try:

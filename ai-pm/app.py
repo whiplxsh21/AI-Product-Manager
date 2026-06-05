@@ -7,10 +7,16 @@ import streamlit as st
 from config import config
 from database import create_tables
 import services.project_service as svc
+import services.auth_service as auth
+import auth_ui
 
 create_tables()
+auth.seed_admin()
 
 st.set_page_config(page_title="PM Pilot", layout="wide")
+
+# Block the app behind a login screen when AUTH_ENABLED is true (no-op locally).
+auth_ui.ensure_authenticated()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -63,6 +69,8 @@ if "page" not in st.session_state:
 
 has_project = bool(st.session_state.get("selected_project_id"))
 pages = ["Projects", "New Project"] + (["Project Detail", "View Results"] if has_project else [])
+if config.auth_enabled:
+    pages.append("Settings")
 
 # If the previously-selected page is no longer reachable (e.g. project deleted),
 # fall back to Projects so nothing renders against missing context.
@@ -86,6 +94,16 @@ if has_project:
     if _selected:
         st.sidebar.caption(f"Project · **{_selected.name}**")
 
+# Signed-in user + logout
+_user = auth_ui.current_user()
+if _user:
+    st.sidebar.divider()
+    st.sidebar.caption(f"Signed in as **{_user['username']}**")
+    if st.sidebar.button("Log out", key="logout_btn", use_container_width=True):
+        auth_ui.logout()
+        st.session_state.page = "Projects"
+        st.rerun()
+
 page = st.session_state.page
 
 
@@ -93,7 +111,7 @@ page = st.session_state.page
 
 if page == "Projects":
     st.title("Your Projects")
-    projects = svc.get_all_projects()
+    projects = svc.get_all_projects(owner_id=auth_ui.current_owner_id())
 
     if not projects:
         st.info("No projects yet. Create one to get started.")
@@ -129,7 +147,8 @@ elif page == "New Project":
         if not name.strip():
             st.error("Project name is required.")
         else:
-            project = svc.create_project(name.strip(), description.strip() or None)
+            project = svc.create_project(name.strip(), description.strip() or None,
+                                         owner_id=auth_ui.current_owner_id())
             st.session_state.selected_project_id = project.id
             st.session_state.page = "Project Detail"
             st.session_state.pop("run_id", None)
@@ -147,6 +166,9 @@ elif page == "Project Detail":
     project = svc.get_project(project_id)
     if not project:
         st.error("Project not found.")
+        st.stop()
+    if not auth_ui.can_access(project):
+        st.error("You don't have access to this project.")
         st.stop()
 
     st.title(project.name)
@@ -256,7 +278,8 @@ elif page == "Project Detail":
                            requirement_details=details.strip() or None,
                            persona_override=persona.strip() or None,
                            output_style=style,
-                           document_ids=selected_ids)
+                           document_ids=selected_ids,
+                           llm_settings=auth_ui.current_llm_settings())
 
                 def _run_in_bg(c=cfg):
                     svc.run_pipeline(project_id, **c)
@@ -351,6 +374,9 @@ elif page == "View Results":
     if not project:
         st.error("Project not found.")
         st.stop()
+    if not auth_ui.can_access(project):
+        st.error("You don't have access to this project.")
+        st.stop()
 
     view_run_id = st.session_state.get("view_run_id")
     run = svc.get_run_status(view_run_id) if view_run_id else None
@@ -392,8 +418,8 @@ elif page == "View Results":
                      disabled=is_busy,
                      use_container_width=True,
                      type="primary"):
-            def _regen_in_bg(rid=run.id):
-                svc.regenerate_visuals(rid)
+            def _regen_in_bg(rid=run.id, ls=auth_ui.current_llm_settings()):
+                svc.regenerate_visuals(rid, llm_settings=ls)
 
             threading.Thread(target=_regen_in_bg, daemon=True).start()
             time.sleep(0.6)
@@ -508,3 +534,113 @@ elif page == "View Results":
             st.text(ingestion_output.content)
         else:
             st.caption("Not available.")
+
+
+# ── Page: Settings ──────────────────────────────────────────────────────────
+
+elif page == "Settings":
+    st.title("Settings")
+    user = auth_ui.current_user()
+    if not user:
+        st.error("Not signed in.")
+        st.stop()
+
+    saved = auth.get_llm_settings(user["id"])
+    _PROVIDERS = ["groq", "openai", "anthropic", "gemini", "ollama"]
+    _SECRET_FIELDS = ("groq_api_key", "openai_api_key", "anthropic_api_key", "gemini_api_key")
+
+    def _provider_index(value: str) -> int:
+        return _PROVIDERS.index(value) if value in _PROVIDERS else 0
+
+    st.subheader("LLM configuration")
+    st.caption("Your API keys are encrypted before storage. Leave a key field "
+               "blank to keep the one already saved. Blank model fields use the "
+               "provider's default model.")
+
+    with st.form("llm_settings_form"):
+        st.markdown("**Provider & models**")
+        provider = st.selectbox("Primary provider", _PROVIDERS,
+                                index=_provider_index(saved.get("llm_provider", "")))
+        llm_model = st.text_input("Primary model", value=saved.get("llm_model", ""),
+                                  placeholder="blank = provider default")
+        cleaning_mode = st.selectbox(
+            "Transcript cleaning", ["local", "llm"],
+            index=0 if saved.get("cleaning_mode", "local") == "local" else 1,
+            help="local = regex (no LLM calls); llm = clean with the light model",
+        )
+
+        with st.expander("Advanced model overrides (optional)"):
+            fb_options = ["(none)"] + _PROVIDERS
+            fb_cur = saved.get("llm_fallback_provider", "")
+            fb_idx = fb_options.index(fb_cur) if fb_cur in fb_options else 0
+            fallback_provider = st.selectbox("Fallback provider", fb_options, index=fb_idx)
+            fallback_model = st.text_input("Fallback model",
+                                           value=saved.get("llm_fallback_model", ""))
+            vision_provider = st.selectbox(
+                "Vision provider", fb_options,
+                index=fb_options.index(saved.get("vision_provider", ""))
+                if saved.get("vision_provider", "") in fb_options else 0)
+            vision_model = st.text_input("Vision model", value=saved.get("vision_model", ""))
+            ingestion_provider = st.selectbox(
+                "Ingestion provider", fb_options,
+                index=fb_options.index(saved.get("ingestion_provider", ""))
+                if saved.get("ingestion_provider", "") in fb_options else 0)
+            ingestion_model = st.text_input("Ingestion model",
+                                            value=saved.get("ingestion_model", ""))
+
+        st.markdown("**API keys**")
+        groq_key = st.text_input("Groq API key", type="password",
+                                 placeholder="•••• (saved)" if saved.get("groq_api_key") else "")
+        openai_key = st.text_input("OpenAI API key", type="password",
+                                   placeholder="•••• (saved)" if saved.get("openai_api_key") else "")
+        openai_project = st.text_input("OpenAI project (optional)",
+                                       value=saved.get("openai_project", ""))
+        anthropic_key = st.text_input("Anthropic API key", type="password",
+                                      placeholder="•••• (saved)" if saved.get("anthropic_api_key") else "")
+        gemini_key = st.text_input("Gemini API key", type="password",
+                                   placeholder="•••• (saved)" if saved.get("gemini_api_key") else "")
+
+        save_clicked = st.form_submit_button("Save LLM settings", type="primary")
+
+    if save_clicked:
+        new_settings = dict(saved)  # start from existing so blank secrets persist
+        new_settings.update({
+            "llm_provider": provider,
+            "llm_model": llm_model.strip(),
+            "cleaning_mode": cleaning_mode,
+            "llm_fallback_provider": "" if fallback_provider == "(none)" else fallback_provider,
+            "llm_fallback_model": fallback_model.strip(),
+            "vision_provider": "" if vision_provider == "(none)" else vision_provider,
+            "vision_model": vision_model.strip(),
+            "ingestion_provider": "" if ingestion_provider == "(none)" else ingestion_provider,
+            "ingestion_model": ingestion_model.strip(),
+            "openai_project": openai_project.strip(),
+        })
+        # Secrets: only overwrite when a new value was typed.
+        for field, typed in (
+            ("groq_api_key", groq_key),
+            ("openai_api_key", openai_key),
+            ("anthropic_api_key", anthropic_key),
+            ("gemini_api_key", gemini_key),
+        ):
+            if typed.strip():
+                new_settings[field] = typed.strip()
+
+        auth.save_llm_settings(user["id"], new_settings)
+        st.session_state.llm_settings = new_settings
+        st.success("LLM settings saved.")
+
+    st.divider()
+    st.subheader("Change password")
+    with st.form("change_pw_form"):
+        new_pw = st.text_input("New password", type="password")
+        confirm_pw = st.text_input("Confirm new password", type="password")
+        pw_clicked = st.form_submit_button("Update password")
+    if pw_clicked:
+        if not new_pw or len(new_pw) < 8:
+            st.error("Password must be at least 8 characters.")
+        elif new_pw != confirm_pw:
+            st.error("Passwords do not match.")
+        else:
+            auth.set_password(user["id"], new_pw)
+            st.success("Password updated.")
