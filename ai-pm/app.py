@@ -501,8 +501,59 @@ elif page == "View Results":
                 mime="application/json",
             )
             st.divider()
+
+            # ── Push to Jira ──────────────────────────────────────────────────
+            if not _user:
+                st.info("Sign in to push to Jira.")
+            elif not jira_svc.is_configured(_user["id"]):
+                st.info("Connect your Jira account in **Settings** to push these "
+                        "epics & stories directly into Jira.")
+            else:
+                jira_settings = jira_svc.get_settings(_user["id"])
+                proj_key = jira_settings.get("project_key")
+                push_state = jira_svc.get_push_status(run.id)
+
+                if push_state and push_state["state"] == "running":
+                    st.info("⏳ Pushing to Jira…")
+                    time.sleep(2)
+                    st.rerun()
+                elif not proj_key:
+                    st.warning("Pick a target project in **Settings** first.")
+                else:
+                    if st.button(f"🚀 Push to Jira ({proj_key})", key=f"push_{run.id}"):
+                        jira_svc.start_push(_user["id"], run.id)
+                        st.rerun()
+                    if push_state and push_state["state"] == "done":
+                        st.success(
+                            f"Done — {push_state['created']} created, "
+                            f"{push_state['skipped']} skipped (already pushed), "
+                            f"{push_state['failed']} failed."
+                        )
+                    elif push_state and push_state["state"] == "error":
+                        st.error(f"Push failed: {push_state['error']}")
+
+                records = jira_svc.get_sync_records(run.id)
+                if records:
+                    st.markdown("**Pushed issues**")
+                    st.dataframe(
+                        [
+                            {
+                                "Local ID": r.local_id,
+                                "Type": r.issuetype,
+                                "Jira": r.jira_key or "—",
+                                "Status": r.status,
+                                "Link": r.jira_url or "",
+                                "Notes": r.detail or "",
+                            }
+                            for r in records
+                        ],
+                        column_config={"Link": st.column_config.LinkColumn("Link")},
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+            st.divider()
             st.json(json.loads(jira_output.content))
-            st.info("Jira push will be available in a future version.")
         else:
             st.info("Jira export not yet generated.")
 

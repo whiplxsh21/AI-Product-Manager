@@ -114,3 +114,21 @@ class GeneratedOutput(Base):
 
     project = relationship("Project", back_populates="generated_outputs")
     run = relationship("PipelineRun", back_populates="generated_outputs")
+
+
+class JiraSyncRecord(Base):
+    """One row per epic/story we attempted to push to Jira. Acts as the
+    idempotency map (local_id → Jira issue) so re-pushing a run skips issues
+    already created instead of duplicating them. See services/jira_service.py."""
+    __tablename__ = "jira_sync_records"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    run_id = Column(String, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True, nullable=False)
+    project_id = Column(String, index=True, nullable=True)
+    local_id = Column(String, nullable=False)   # "E1" or "E1-S1" from the export JSON
+    issuetype = Column(String, nullable=False)  # Epic | Story
+    jira_key = Column(String, nullable=True)    # "PROD-101" (null if failed)
+    jira_url = Column(String, nullable=True)
+    status = Column(String, default="created")  # created | failed | skipped
+    detail = Column(Text, nullable=True)        # warnings (created) or error reason
+    created_at = Column(DateTime, default=datetime.utcnow)
