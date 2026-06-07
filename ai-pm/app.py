@@ -8,6 +8,8 @@ from config import config
 from database import create_tables
 import services.project_service as svc
 import services.auth_service as auth
+import services.jira_service as jira_svc
+from integrations.jira import JiraError
 import auth_ui
 
 st.set_page_config(page_title="PM Pilot", layout="wide")
@@ -659,6 +661,84 @@ elif page == "Settings":
         auth.save_llm_settings(user["id"], new_settings)
         st.session_state.llm_settings = new_settings
         st.success("LLM settings saved.")
+
+    # ── Jira integration ─────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Jira integration")
+    st.caption(
+        "Connect your Jira Cloud site to push generated epics & stories. Your API "
+        "token is encrypted before storage. Create a token at "
+        "id.atlassian.com → Security → 'Create and manage API tokens'."
+    )
+
+    jira_saved = jira_svc.get_settings(user["id"])
+
+    with st.form("jira_settings_form"):
+        j_site = st.text_input(
+            "Jira site URL", value=jira_saved.get("site_url", ""),
+            placeholder="https://yourcompany.atlassian.net",
+        )
+        j_email = st.text_input("Jira account email", value=jira_saved.get("email", ""))
+        j_token = st.text_input(
+            "Jira API token", type="password",
+            placeholder="•••• (saved)" if jira_saved.get("api_token") else "",
+            help="Leave blank to keep the token already saved.",
+        )
+        jc1, jc2 = st.columns(2)
+        with jc1:
+            j_save = st.form_submit_button("Save Jira settings", type="primary")
+        with jc2:
+            j_test = st.form_submit_button("Save & test connection")
+
+    if j_save or j_test:
+        if not j_site.strip() or not j_email.strip():
+            st.error("Site URL and email are both required.")
+        elif not (j_token.strip() or jira_saved.get("api_token")):
+            st.error("Enter an API token (none saved yet).")
+        else:
+            try:
+                jira_svc.save_settings(
+                    user["id"], site_url=j_site, email=j_email,
+                    api_token=j_token or None,
+                )
+                st.success("Jira settings saved.")
+            except JiraError as e:
+                st.error(f"Could not save: {e.message}")
+                j_test = False
+            if j_test:
+                try:
+                    who = jira_svc.test_connection(user["id"])
+                    st.success(
+                        f"✓ Connected as {who.get('display_name') or 'unknown user'}"
+                        + (f" ({who['email']})" if who.get("email") else "")
+                    )
+                except JiraError as e:
+                    st.error(f"Connection failed: {e.message}")
+
+    if jira_svc.is_configured(user["id"]):
+        st.markdown("**Target project**")
+        cur_key = jira_svc.get_settings(user["id"]).get("project_key", "")
+        if cur_key:
+            st.caption(f"Current target project: `{cur_key}`")
+        if st.button("Load my Jira projects"):
+            try:
+                st.session_state.jira_projects = jira_svc.list_projects(user["id"])
+                if not st.session_state.jira_projects:
+                    st.warning("No projects visible to this account.")
+            except JiraError as e:
+                st.error(f"Could not load projects: {e.message}")
+        projects = st.session_state.get("jira_projects", [])
+        if projects:
+            labels = [f"{p['name']} ({p['key']})" for p in projects]
+            keys = [p["key"] for p in projects]
+            idx = keys.index(cur_key) if cur_key in keys else 0
+            choice = st.selectbox("Project to push into", labels, index=idx)
+            if st.button("Save target project"):
+                chosen_key = keys[labels.index(choice)]
+                jira_svc.save_project_selection(user["id"], chosen_key)
+                st.success(f"Target project set to {chosen_key}.")
+    else:
+        st.info("Save and test your connection above to pick a target project.")
 
     st.divider()
     st.subheader("Change password")

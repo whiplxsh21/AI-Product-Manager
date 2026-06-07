@@ -20,6 +20,9 @@ Base = declarative_base()
 # Columns added after the initial schema. create_all() does not ALTER existing
 # tables, so we add any missing columns here to keep an existing DB working.
 _MIGRATIONS = {
+    "users": {
+        "jira_settings_enc": "TEXT",
+    },
     "projects": {
         "owner_id": "VARCHAR",
     },

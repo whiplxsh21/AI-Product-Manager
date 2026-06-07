@@ -195,3 +195,23 @@ def save_llm_settings(user_id: str, settings: dict) -> None:
             db.commit()
     finally:
         db.close()
+
+
+# ── Per-user Jira settings (encrypted) ────────────────────────────────────────
+
+def get_jira_settings(user_id: str) -> dict:
+    user = get_user(user_id)
+    if not user:
+        return {}
+    return decrypt_json(user.jira_settings_enc)
+
+
+def save_jira_settings(user_id: str, settings: dict) -> None:
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first()
+        if user:
+            user.jira_settings_enc = encrypt_json(settings)
+            db.commit()
+    finally:
+        db.close()

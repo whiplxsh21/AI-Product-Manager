@@ -22,6 +22,10 @@ class User(Base):
     # Fernet-encrypted JSON of this user's LLM settings (provider, keys, models).
     # Never stored in plaintext. See crypto.py.
     llm_settings_enc = Column(Text, nullable=True)
+    # Fernet-encrypted JSON of this user's Jira connection (site URL, email,
+    # API token, selected project key, story-points field id). Same at-rest
+    # protection as llm_settings_enc. See crypto.py and services/jira_service.py.
+    jira_settings_enc = Column(Text, nullable=True)
     reset_token = Column(String, nullable=True)
     reset_token_expires = Column(DateTime, nullable=True)
 
