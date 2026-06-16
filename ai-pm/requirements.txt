@@ -18,6 +18,7 @@ python-docx
 python-pptx
 python-multipart
 requests
+json_repair               # repairs malformed LLM JSON (framework / wireframe nodes)
 # ── Hosting / auth ───────────────────────────────────────────────
 psycopg2-binary           # PostgreSQL driver (Neon). Not needed for local SQLite.
 bcrypt                    # password hashing

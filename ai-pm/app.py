@@ -643,7 +643,7 @@ elif page == "View Results":
                 )
             st.divider()
             if prototype_output:
-                st.components.v1.html(prototype_output.content, height=760, scrolling=False)
+                st.components.v1.html(prototype_output.content, height=860, scrolling=False)
             else:
                 # Older runs generated before the interactive prototype existed —
                 # fall back to the static scrolling SVG canvas.

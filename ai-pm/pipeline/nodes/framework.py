@@ -11,8 +11,11 @@ from pipeline.state import PipelineState
 
 
 def _loads_json(text: str) -> dict:
-    """Parse JSON tolerantly — some models wrap output in markdown fences or add
-    prose around it despite instructions not to."""
+    """Parse JSON tolerantly — some models wrap output in markdown fences, add
+    prose around it, leave trailing commas, emit unescaped quotes inside string
+    values, or truncate large responses. We try strict parsing first, then a
+    brace-extraction pass, then json_repair as a last resort so a single bad
+    character doesn't fail the whole pipeline."""
     s = text.strip()
     if s.startswith("```"):
         s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
@@ -21,9 +24,17 @@ def _loads_json(text: str) -> dict:
         return json.loads(s)
     except json.JSONDecodeError:
         start, end = s.find("{"), s.rfind("}")
-        if start != -1 and end > start:
-            return json.loads(s[start:end + 1])
-        raise
+        candidate = s[start:end + 1] if (start != -1 and end > start) else s
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            # Last resort: repair common LLM JSON defects (unescaped quotes,
+            # trailing commas, truncated brackets) and parse the result.
+            from json_repair import repair_json
+            repaired = repair_json(candidate, return_objects=True)
+            if isinstance(repaired, dict):
+                return repaired
+            raise
 
 
 def framework_node(state: PipelineState) -> PipelineState:

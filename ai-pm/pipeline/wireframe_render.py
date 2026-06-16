@@ -419,8 +419,8 @@ def _screen_svg(screen) -> str:
     """A single screen rendered as a standalone, responsive SVG (origin 0,0)."""
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {SCREEN_W} {SCREEN_H}" '
-        f'width="100%" height="100%" preserveAspectRatio="xMidYMin meet" '
-        f'style="display:block">',
+        f'preserveAspectRatio="xMidYMin meet" '
+        f'style="display:block;width:100%;height:auto">',
         f'<rect x="0" y="0" width="{SCREEN_W}" height="{SCREEN_H}" fill="white"/>',
     ]
     cy = INNER_PAD
@@ -493,9 +493,9 @@ def render_prototype_html(schema: dict) -> str:
   .pm-thumb-n {{ display: inline-block; min-width: 18px; height: 18px; line-height: 18px;
                 text-align: center; background: #e5e7eb; color: #374151; border-radius: 9px;
                 font-size: 11px; margin-right: 6px; }}
-  .pm-stage {{ flex: 1; overflow: auto; padding: 24px; display: flex;
-              justify-content: center; align-items: flex-start; }}
-  .pm-frame {{ width: 100%; max-width: 1100px; background: #fff; border: 1px solid #cbd5e1;
+  .pm-stage {{ flex: 1; overflow: auto; padding: 24px; }}
+  .pm-stage-inner {{ width: 100%; max-width: 1180px; margin: 0 auto; }}
+  .pm-frame {{ width: 100%; background: #fff; border: 1px solid #cbd5e1;
               border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.08); overflow: hidden; }}
   .pm-hint {{ text-align: center; color: #94a3b8; font-size: 12px; padding-top: 10px; }}
   .pm-hotspot:hover {{ outline: 2px solid #2563eb; outline-offset: 1px; }}
@@ -513,7 +513,7 @@ def render_prototype_html(schema: dict) -> str:
   <div class="pm-body">
     <div class="pm-strip">{''.join(strip)}</div>
     <div class="pm-stage">
-      <div>
+      <div class="pm-stage-inner">
         <div class="pm-frame" id="pm-frame">{''.join(deck)}</div>
         <div class="pm-hint">Click a button, tab, or list row to navigate. Use the
           list on the left or Prev/Next to move between screens.</div>
@@ -525,12 +525,12 @@ def render_prototype_html(schema: dict) -> str:
   var IDS = {ids_json};
   var screens = Array.prototype.slice.call(document.querySelectorAll('.pm-screen'));
   var thumbs = Array.prototype.slice.call(document.querySelectorAll('.pm-thumb'));
-  var history = [];
+  var navStack = [];
   var cur = 0;
 
   function show(idx, record) {{
     if (idx < 0 || idx >= screens.length) return;
-    if (record && idx !== cur) history.push(cur);
+    if (record && idx !== cur) navStack.push(cur);
     cur = idx;
     screens.forEach(function (s, i) {{ s.style.display = (i === idx) ? 'block' : 'none'; }});
     thumbs.forEach(function (t, i) {{ t.classList.toggle('active', i === idx); }});
@@ -538,7 +538,7 @@ def render_prototype_html(schema: dict) -> str:
     document.getElementById('pm-step').textContent = '(' + (idx + 1) + ' / ' + screens.length + ')';
     document.getElementById('pm-prev').disabled = (idx === 0);
     document.getElementById('pm-next').disabled = (idx === screens.length - 1);
-    document.getElementById('pm-back').disabled = (history.length === 0);
+    document.getElementById('pm-back').disabled = (navStack.length === 0);
   }}
 
   function gotoId(id) {{
@@ -556,7 +556,7 @@ def render_prototype_html(schema: dict) -> str:
   document.getElementById('pm-prev').addEventListener('click', function () {{ show(cur - 1, true); }});
   document.getElementById('pm-next').addEventListener('click', function () {{ show(cur + 1, true); }});
   document.getElementById('pm-back').addEventListener('click', function () {{
-    if (history.length) show(history.pop(), false);
+    if (navStack.length) show(navStack.pop(), false);
   }});
 
   show(0, false);
