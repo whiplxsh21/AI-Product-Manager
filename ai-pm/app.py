@@ -9,6 +9,7 @@ from database import create_tables
 import services.project_service as svc
 import services.auth_service as auth
 import services.jira_service as jira_svc
+import services.export_service as export_svc
 from integrations.jira import JiraError
 import auth_ui
 
@@ -82,6 +83,49 @@ def _fmt_date(dt) -> str:
     if dt is None:
         return "—"
     return dt.strftime("%b %d, %Y")
+
+
+# Markdown → Word/PDF conversions are cached on the document text so a document
+# is converted once, not on every rerun.
+@st.cache_data(show_spinner=False)
+def _docx_bytes(content: str) -> bytes:
+    return export_svc.md_to_docx_bytes(content)
+
+
+@st.cache_data(show_spinner=False)
+def _pdf_bytes(content: str) -> bytes:
+    return export_svc.md_to_pdf_bytes(content)
+
+
+def _doc_download_buttons(content: str, base_name: str, key_prefix: str) -> None:
+    """Render Markdown / Word / PDF download buttons for a markdown document.
+    Each export format is independent — if one converter fails the others (and
+    the page) still work."""
+    col_md, col_docx, col_pdf = st.columns(3)
+    with col_md:
+        st.download_button(
+            "⬇ Markdown (.md)", data=content, file_name=f"{base_name}.md",
+            mime="text/markdown", key=f"{key_prefix}_md", use_container_width=True,
+        )
+    with col_docx:
+        try:
+            st.download_button(
+                "⬇ Word (.docx)", data=_docx_bytes(content),
+                file_name=f"{base_name}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key=f"{key_prefix}_docx", use_container_width=True,
+            )
+        except Exception as e:  # noqa: BLE001 — keep the page usable
+            st.caption(f"Word export unavailable: {e}")
+    with col_pdf:
+        try:
+            st.download_button(
+                "⬇ PDF (.pdf)", data=_pdf_bytes(content),
+                file_name=f"{base_name}.pdf", mime="application/pdf",
+                key=f"{key_prefix}_pdf", use_container_width=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            st.caption(f"PDF export unavailable: {e}")
 
 
 # ── Sidebar Navigation ────────────────────────────────────────────────────────
@@ -479,12 +523,7 @@ elif page == "View Results":
 
     with tab1:
         if prd_output:
-            st.download_button(
-                "⬇ Download PRD (.md)",
-                data=prd_output.content,
-                file_name="prd.md",
-                mime="text/markdown",
-            )
+            _doc_download_buttons(prd_output.content, "prd", f"prd_{run.id}")
             st.divider()
             st.markdown(prd_output.content)
         else:
@@ -492,12 +531,7 @@ elif page == "View Results":
 
     with tab2:
         if bdd_output:
-            st.download_button(
-                "⬇ Download BDD Stories (.md)",
-                data=bdd_output.content,
-                file_name="bdd_stories.md",
-                mime="text/markdown",
-            )
+            _doc_download_buttons(bdd_output.content, "bdd_stories", f"bdd_{run.id}")
             st.divider()
             st.markdown(bdd_output.content)
         else:

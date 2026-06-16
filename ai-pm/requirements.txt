@@ -19,6 +19,9 @@ python-pptx
 python-multipart
 requests
 json_repair               # repairs malformed LLM JSON (framework / wireframe nodes)
+markdown                  # markdown → HTML for PDF export
+pypandoc-binary           # markdown → .docx (bundles the pandoc binary; no system install)
+xhtml2pdf                 # markdown/HTML → .pdf, pure-python (no system libs)
 # ── Hosting / auth ───────────────────────────────────────────────
 psycopg2-binary           # PostgreSQL driver (Neon). Not needed for local SQLite.
 bcrypt                    # password hashing
