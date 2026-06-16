@@ -52,6 +52,17 @@ def _clip(text: str, max_chars: int) -> str:
     return s if len(s) <= max_chars else s[: max_chars - 1].rstrip() + "…"
 
 
+def _hotspot(fragment: str, to) -> str:
+    """Wrap an SVG fragment so it becomes a clickable navigation target in the
+    interactive prototype. `data-to` carries the destination screen id; the
+    prototype HTML shell binds the click. In a downloaded static .svg this is
+    inert (no JS), so the same renderers serve both outputs."""
+    if not to:
+        return fragment
+    return (f'<g class="pm-hotspot" data-to="{_esc(to)}" style="cursor:pointer">'
+            f'{fragment}</g>')
+
+
 # ── Component renderers ─────────────────────────────────────────────────────────
 # Each returns (svg_fragment, height_consumed).
 
@@ -74,24 +85,27 @@ def _nav_bar(r, x, y, w):
     h = 44
     items = r.get("items", []) or []
     active = r.get("active", "")
+    links = r.get("links", {}) or {}
     parts = [f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#f3f4f6" stroke="#e5e7eb"/>']
     cx = x + 16
     for item in items[:8]:
         label = _clip(item, 18)
         is_active = item == active
         text_w = max(60, 9 * len(label) + 24)
+        item_parts = []
         if is_active:
-            parts.append(
+            item_parts.append(
                 f'<rect x="{cx}" y="{y + 8}" width="{text_w}" height="{h - 16}" rx="14" fill="#1f2937"/>'
             )
-            parts.append(
+            item_parts.append(
                 f'<text x="{cx + text_w / 2}" y="{y + 28}" text-anchor="middle" '
                 f'font-family="Inter, Arial" font-size="13" fill="white">{_esc(label)}</text>'
             )
         else:
-            parts.append(
+            item_parts.append(
                 f'<text x="{cx + 12}" y="{y + 28}" font-family="Inter, Arial" font-size="13" fill="#4b5563">{_esc(label)}</text>'
             )
+        parts.append(_hotspot("\n".join(item_parts), links.get(item)))
         cx += text_w + 8
     return "\n".join(parts), h
 
@@ -162,13 +176,12 @@ def _form(r, x, y, w):
     btn_label = _esc(_clip(r.get("submit", "Submit"), 24))
     btn_w = max(120, 10 * len(btn_label) + 32)
     btn_x = x + w - btn_w - 16
-    parts.append(
+    submit_frag = (
         f'<rect x="{btn_x}" y="{cy}" width="{btn_w}" height="{submit_h - 8}" rx="6" fill="#2563eb"/>'
-    )
-    parts.append(
         f'<text x="{btn_x + btn_w / 2}" y="{cy + 24}" text-anchor="middle" '
         f'font-family="Inter, Arial" font-size="13" font-weight="600" fill="white">{btn_label}</text>'
     )
+    parts.append(_hotspot(submit_frag, r.get("to")))
     return "\n".join(parts), h
 
 
@@ -203,17 +216,23 @@ def _table(r, x, y, w):
 
 def _list(r, x, y, w):
     items = r.get("items", []) or []
+    links = r.get("links", {}) or {}
     item_h = 36
     h = max(item_h * min(len(items), 8) + 8, item_h)
     parts = [f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="6" fill="white" stroke="#e5e7eb"/>']
     for i, item in enumerate(items[:8]):
         cy = y + 6 + i * item_h
-        parts.append(
-            f'<circle cx="{x + 18}" cy="{cy + 16}" r="3" fill="#6b7280"/>'
-        )
-        parts.append(
-            f'<text x="{x + 32}" y="{cy + 22}" font-family="Inter, Arial" font-size="13" fill="#374151">{_esc(_clip(item, 80))}</text>'
-        )
+        target = links.get(item)
+        row_parts = [
+            f'<circle cx="{x + 18}" cy="{cy + 16}" r="3" fill="#6b7280"/>',
+            f'<text x="{x + 32}" y="{cy + 22}" font-family="Inter, Arial" font-size="13" fill="#374151">{_esc(_clip(item, 80))}</text>',
+        ]
+        if target:
+            # Transparent overlay so the whole row is clickable, not just the text.
+            row_parts.insert(
+                0, f'<rect x="{x}" y="{cy}" width="{w}" height="{item_h}" fill="transparent"/>'
+            )
+        parts.append(_hotspot("\n".join(row_parts), target))
     return "\n".join(parts), h
 
 
@@ -236,13 +255,12 @@ def _card(r, x, y, w):
     if action:
         btn_w = max(96, 10 * len(action) + 24)
         btn_x = x + w - btn_w - 16
-        parts.append(
+        action_frag = (
             f'<rect x="{btn_x}" y="{y + h - 38}" width="{btn_w}" height="28" rx="4" fill="#1f2937"/>'
-        )
-        parts.append(
             f'<text x="{btn_x + btn_w / 2}" y="{y + h - 19}" text-anchor="middle" '
             f'font-family="Inter, Arial" font-size="12" fill="white">{action}</text>'
         )
+        parts.append(_hotspot(action_frag, r.get("to")))
     return "\n".join(parts), h
 
 
@@ -259,7 +277,7 @@ def _button(r, x, y, w):
         f'<text x="{x + btn_w / 2}" y="{y + 24}" text-anchor="middle" font-family="Inter, Arial" '
         f'font-size="13" font-weight="600" fill="{text_fill}">{label}</text>',
     ]
-    return "\n".join(parts), h
+    return _hotspot("\n".join(parts), r.get("to")), h
 
 
 def _text_block(r, x, y, w):
@@ -389,3 +407,158 @@ def render_wireframes(schema: dict) -> str:
 
     parts.append("</svg>")
     return "\n".join(parts)
+
+
+# ── Interactive click-through prototype ──────────────────────────────────────────
+# One screen visible at a time on a device frame; clicking a wired element (button,
+# card action, nav item, list row carrying a `to`/`links` target) navigates to the
+# destination screen — entirely client-side, so it runs inside Streamlit's iframe
+# and as a standalone downloadable .html.
+
+def _screen_svg(screen) -> str:
+    """A single screen rendered as a standalone, responsive SVG (origin 0,0)."""
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {SCREEN_W} {SCREEN_H}" '
+        f'width="100%" height="100%" preserveAspectRatio="xMidYMin meet" '
+        f'style="display:block">',
+        f'<rect x="0" y="0" width="{SCREEN_W}" height="{SCREEN_H}" fill="white"/>',
+    ]
+    cy = INNER_PAD
+    cx = INNER_PAD
+    cw = SCREEN_W - 2 * INNER_PAD
+    for region in screen.get("regions", []) or []:
+        svg, dh = _render_component(region, cx, cy, cw)
+        if cy + dh > SCREEN_H - INNER_PAD:
+            break  # don't overflow the frame
+        parts.append(svg)
+        cy += dh + COMPONENT_GAP
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def render_prototype_html(schema: dict) -> str:
+    """Self-contained interactive prototype: device frame, clickable hotspots,
+    a thumbnail filmstrip, and Back/Prev/Next controls. Works embedded in
+    Streamlit and as a standalone downloaded file."""
+    screens = schema.get("screens", []) or []
+    if not screens:
+        return (
+            '<!doctype html><html><body style="font-family:Inter,Arial;padding:40px;'
+            'color:#6b7280">No screens generated.</body></html>'
+        )
+
+    # Build the deck (one positioned screen container per screen) and the filmstrip.
+    deck, strip = [], []
+    ids = []
+    for i, screen in enumerate(screens):
+        sid = str(screen.get("id") or f"S{i + 1}")
+        ids.append(sid)
+        name = _esc(_clip(screen.get("name", f"Screen {i + 1}"), 60))
+        purpose = _esc(_clip(screen.get("purpose", ""), 90))
+        deck.append(
+            f'<div class="pm-screen" data-id="{sid}" data-index="{i}" '
+            f'data-name="{name}" style="display:none">'
+            f'{_screen_svg(screen)}</div>'
+        )
+        strip.append(
+            f'<button class="pm-thumb" data-index="{i}" title="{purpose}">'
+            f'<span class="pm-thumb-n">{i + 1}</span> {name}</button>'
+        )
+
+    ids_json = "[" + ",".join(f'"{_esc(s)}"' for s in ids) + "]"
+
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; font-family: Inter, -apple-system, Arial, sans-serif;
+         background: #f1f5f9; color: #111827; }}
+  .pm-wrap {{ display: flex; flex-direction: column; height: 100vh; }}
+  .pm-topbar {{ display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+               background: #fff; border-bottom: 1px solid #e5e7eb; flex: 0 0 auto; }}
+  .pm-topbar .pm-title {{ font-weight: 700; font-size: 15px; }}
+  .pm-topbar .pm-step {{ color: #6b7280; font-size: 13px; }}
+  .pm-spacer {{ flex: 1; }}
+  .pm-btn {{ border: 1px solid #d1d5db; background: #fff; border-radius: 6px;
+            padding: 6px 12px; font-size: 13px; cursor: pointer; }}
+  .pm-btn:hover {{ background: #f3f4f6; }}
+  .pm-btn:disabled {{ opacity: .4; cursor: default; }}
+  .pm-body {{ display: flex; flex: 1; min-height: 0; }}
+  .pm-strip {{ flex: 0 0 200px; overflow-y: auto; background: #fff;
+              border-right: 1px solid #e5e7eb; padding: 8px; }}
+  .pm-thumb {{ display: block; width: 100%; text-align: left; border: 1px solid #e5e7eb;
+              background: #fff; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px;
+              font-size: 12px; cursor: pointer; color: #374151; }}
+  .pm-thumb:hover {{ background: #f3f4f6; }}
+  .pm-thumb.active {{ border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 600; }}
+  .pm-thumb-n {{ display: inline-block; min-width: 18px; height: 18px; line-height: 18px;
+                text-align: center; background: #e5e7eb; color: #374151; border-radius: 9px;
+                font-size: 11px; margin-right: 6px; }}
+  .pm-stage {{ flex: 1; overflow: auto; padding: 24px; display: flex;
+              justify-content: center; align-items: flex-start; }}
+  .pm-frame {{ width: 100%; max-width: 1100px; background: #fff; border: 1px solid #cbd5e1;
+              border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.08); overflow: hidden; }}
+  .pm-hint {{ text-align: center; color: #94a3b8; font-size: 12px; padding-top: 10px; }}
+  .pm-hotspot:hover {{ outline: 2px solid #2563eb; outline-offset: 1px; }}
+</style></head>
+<body>
+<div class="pm-wrap">
+  <div class="pm-topbar">
+    <span class="pm-title" id="pm-name"></span>
+    <span class="pm-step" id="pm-step"></span>
+    <span class="pm-spacer"></span>
+    <button class="pm-btn" id="pm-back">↩ Back</button>
+    <button class="pm-btn" id="pm-prev">‹ Prev</button>
+    <button class="pm-btn" id="pm-next">Next ›</button>
+  </div>
+  <div class="pm-body">
+    <div class="pm-strip">{''.join(strip)}</div>
+    <div class="pm-stage">
+      <div>
+        <div class="pm-frame" id="pm-frame">{''.join(deck)}</div>
+        <div class="pm-hint">Click a button, tab, or list row to navigate. Use the
+          list on the left or Prev/Next to move between screens.</div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  var IDS = {ids_json};
+  var screens = Array.prototype.slice.call(document.querySelectorAll('.pm-screen'));
+  var thumbs = Array.prototype.slice.call(document.querySelectorAll('.pm-thumb'));
+  var history = [];
+  var cur = 0;
+
+  function show(idx, record) {{
+    if (idx < 0 || idx >= screens.length) return;
+    if (record && idx !== cur) history.push(cur);
+    cur = idx;
+    screens.forEach(function (s, i) {{ s.style.display = (i === idx) ? 'block' : 'none'; }});
+    thumbs.forEach(function (t, i) {{ t.classList.toggle('active', i === idx); }});
+    document.getElementById('pm-name').textContent = screens[idx].getAttribute('data-name');
+    document.getElementById('pm-step').textContent = '(' + (idx + 1) + ' / ' + screens.length + ')';
+    document.getElementById('pm-prev').disabled = (idx === 0);
+    document.getElementById('pm-next').disabled = (idx === screens.length - 1);
+    document.getElementById('pm-back').disabled = (history.length === 0);
+  }}
+
+  function gotoId(id) {{
+    var i = IDS.indexOf(id);
+    if (i >= 0) show(i, true);
+  }}
+
+  document.getElementById('pm-frame').addEventListener('click', function (e) {{
+    var hs = e.target.closest('.pm-hotspot');
+    if (hs) gotoId(hs.getAttribute('data-to'));
+  }});
+  thumbs.forEach(function (t) {{
+    t.addEventListener('click', function () {{ show(parseInt(t.getAttribute('data-index'), 10), true); }});
+  }});
+  document.getElementById('pm-prev').addEventListener('click', function () {{ show(cur - 1, true); }});
+  document.getElementById('pm-next').addEventListener('click', function () {{ show(cur + 1, true); }});
+  document.getElementById('pm-back').addEventListener('click', function () {{
+    if (history.length) show(history.pop(), false);
+  }});
+
+  show(0, false);
+</script>
+</body></html>"""

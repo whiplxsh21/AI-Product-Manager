@@ -470,6 +470,7 @@ elif page == "View Results":
     bdd_output = svc.get_output(project_id, run.id, "bdd")
     jira_output = svc.get_output(project_id, run.id, "jira_format")
     wireframe_output = svc.get_output(project_id, run.id, "wireframe")
+    prototype_output = svc.get_output(project_id, run.id, "wireframe_prototype")
     ux_flow_output = svc.get_output(project_id, run.id, "ux_flow")
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
@@ -617,18 +618,36 @@ elif page == "View Results":
                     )
 
     with tab4:
-        st.caption("Drag the downloaded SVG into a Figma frame, or use File → Import.")
-        if wireframe_output:
-            st.download_button(
-                "⬇ Download Wireframe (.svg)",
-                data=wireframe_output.content,
-                file_name="wireframe.svg",
-                mime="image/svg+xml",
-            )
-            st.divider()
-            st.components.v1.html(wireframe_output.content, height=700, scrolling=True)
-        else:
+        if not wireframe_output:
             st.info("Wireframe not yet generated.")
+        else:
+            st.caption("Click buttons, tabs, and list rows to walk the flow. Use the "
+                       "screen list or Prev/Next on the left to move between screens.")
+            dl1, dl2 = st.columns(2)
+            with dl1:
+                if prototype_output:
+                    st.download_button(
+                        "⬇ Download interactive prototype (.html)",
+                        data=prototype_output.content,
+                        file_name="wireframe_prototype.html",
+                        mime="text/html",
+                        use_container_width=True,
+                    )
+            with dl2:
+                st.download_button(
+                    "⬇ Download wireframe (.svg)",
+                    data=wireframe_output.content,
+                    file_name="wireframe.svg",
+                    mime="image/svg+xml",
+                    use_container_width=True,
+                )
+            st.divider()
+            if prototype_output:
+                st.components.v1.html(prototype_output.content, height=760, scrolling=False)
+            else:
+                # Older runs generated before the interactive prototype existed —
+                # fall back to the static scrolling SVG canvas.
+                st.components.v1.html(wireframe_output.content, height=700, scrolling=True)
 
     with tab5:
         st.caption("Drag the downloaded SVG into a Figma frame, or use File → Import.")

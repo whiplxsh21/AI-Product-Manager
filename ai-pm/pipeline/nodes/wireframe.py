@@ -8,7 +8,7 @@ from models import GeneratedOutput, PipelineRun, Project
 from pipeline.nodes.framework import _loads_json
 from pipeline.prompts import WIREFRAME_PROMPT
 from pipeline.state import PipelineState
-from pipeline.wireframe_render import render_wireframes
+from pipeline.wireframe_render import render_prototype_html, render_wireframes
 from storage import get_storage
 
 
@@ -48,20 +48,27 @@ PRD (for additional context):
             schema = _loads_json(retry.content)
 
         svg = render_wireframes(schema)
+        prototype_html = render_prototype_html(schema)
 
         storage = get_storage()
         path = storage.save(state["project_id"], f"{state['run_id']}_wireframe.svg", svg)
+        storage.save(state["project_id"], f"{state['run_id']}_wireframe.html", prototype_html)
 
         db = SessionLocal()
         try:
             run = db.query(PipelineRun).filter_by(id=state["run_id"]).first()
-            output = GeneratedOutput(
+            db.add(GeneratedOutput(
                 project_id=state["project_id"],
                 run_id=state["run_id"],
                 stage="wireframe",
                 content=svg,
-            )
-            db.add(output)
+            ))
+            db.add(GeneratedOutput(
+                project_id=state["project_id"],
+                run_id=state["run_id"],
+                stage="wireframe_prototype",
+                content=prototype_html,
+            ))
             statuses = dict(run.stage_statuses)
             statuses["wireframe"] = "complete"
             run.stage_statuses = statuses

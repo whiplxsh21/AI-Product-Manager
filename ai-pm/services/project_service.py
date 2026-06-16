@@ -296,7 +296,7 @@ def regenerate_visuals(run_id: str, llm_settings: dict | None = None) -> None:
         # Remove prior visual outputs so we don't keep stale duplicates
         db.query(GeneratedOutput).filter(
             GeneratedOutput.run_id == run_id,
-            GeneratedOutput.stage.in_(["wireframe", "ux_flow"]),
+            GeneratedOutput.stage.in_(["wireframe", "wireframe_prototype", "ux_flow"]),
         ).delete(synchronize_session=False)
 
         # Reset stage statuses for the two stages we're about to re-run

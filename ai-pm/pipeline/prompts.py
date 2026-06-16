@@ -198,9 +198,10 @@ The "regions" array is rendered top-to-bottom inside each screen frame. You
 must use ONLY the following region types and fields. Do not invent new types.
 
 - {"type": "header", "content": "Title", "subtitle": "optional"}
-- {"type": "nav_bar", "items": ["Home", "Schedules"], "active": "Home"}
+- {"type": "nav_bar", "items": ["Home", "Schedules"], "active": "Home",
+   "links": {"Schedules": "S2"}}
 - {"type": "sidebar", "items": ["Overview", "Items", "Settings"]}
-- {"type": "form", "submit": "Save", "fields": [
+- {"type": "form", "submit": "Save", "to": "S3", "fields": [
     {"label": "Email", "kind": "input"},
     {"label": "Password", "kind": "input", "secret": true},
     {"label": "Notes", "kind": "textarea"},
@@ -209,12 +210,24 @@ must use ONLY the following region types and fields. Do not invent new types.
     {"label": "Due date", "kind": "date"}
   ]}
 - {"type": "table", "columns": ["Col1", "Col2"], "row_count": 5}
-- {"type": "list", "items": ["Item one", "Item two"]}
-- {"type": "card", "title": "Title", "body": "Short body text", "action": "View"}
-- {"type": "button", "label": "Primary action", "primary": true}
+- {"type": "list", "items": ["Item one", "Item two"], "links": {"Item one": "S4"}}
+- {"type": "card", "title": "Title", "body": "Short body text", "action": "View", "to": "S2"}
+- {"type": "button", "label": "Primary action", "primary": true, "to": "S2"}
 - {"type": "text_block", "content": "A paragraph of explanatory text."}
 - {"type": "image_placeholder", "caption": "chart / illustration name"}
 - {"type": "footer", "content": "Footer text"}
+
+Navigation (IMPORTANT — this powers a clickable click-through prototype):
+- Wire the screens together so the primary user journey can be walked by
+  clicking. Use the OPTIONAL fields:
+    • "to": "<screen id>" on a `button`, `card`, or `form` (the form's submit).
+    • "links": {"<item label>": "<screen id>"} on a `nav_bar` or `list`, where
+      the keys EXACTLY match strings in that region's "items".
+- Every target must be the "id" of another screen in this same response.
+- Give most screens at least one outgoing link, and make sure each screen
+  (except a final/confirmation screen) is reachable by clicking from another.
+  The first screen is the entry point.
+- Only wire links that make real product sense — don't link unrelated screens.
 
 Rules:
 - 4-6 screens total. Each screen has 3-6 regions.
