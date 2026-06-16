@@ -14,6 +14,18 @@ import auth_ui
 
 st.set_page_config(page_title="PM Pilot", layout="wide")
 
+# Trim Streamlit's large default top padding so page titles sit near the top
+# instead of below a big band of empty space.
+st.markdown(
+    """
+    <style>
+      .block-container { padding-top: 2rem; padding-bottom: 2rem; }
+      [data-testid="stHeader"] { height: 0; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 @st.cache_resource
 def _bootstrap():
@@ -459,8 +471,6 @@ elif page == "View Results":
     jira_output = svc.get_output(project_id, run.id, "jira_format")
     wireframe_output = svc.get_output(project_id, run.id, "wireframe")
     ux_flow_output = svc.get_output(project_id, run.id, "ux_flow")
-    framework_output = svc.get_output(project_id, run.id, "framework")
-    ingestion_output = svc.get_output(project_id, run.id, "ingestion")
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
         ["PRD", "BDD Stories", "Jira Export", "Wireframe", "UX Flow"]
@@ -493,36 +503,90 @@ elif page == "View Results":
             st.info("BDD stories not yet generated.")
 
     with tab3:
-        if jira_output:
-            st.download_button(
-                "⬇ Download Jira Export (.json)",
-                data=jira_output.content,
-                file_name="jira_export.json",
-                mime="application/json",
-            )
+        if not jira_output:
+            st.info("Backlog not yet generated.")
+        else:
+            export = json.loads(jira_output.content)
+            epics = export.get("epics", [])
+            total_stories = sum(len(e.get("stories", [])) for e in epics)
+
+            # ── Readable backlog preview (what will be created) ────────────────
+            st.subheader("Backlog to create")
+            st.caption(f"{len(epics)} epics · {total_stories} stories will be created in Jira.")
+
+            for epic in epics:
+                with st.container(border=True):
+                    st.markdown(f"#### 📦 {epic.get('summary') or 'Untitled epic'}")
+                    if epic.get("description"):
+                        st.caption(epic["description"])
+                    stories = epic.get("stories", [])
+                    if not stories:
+                        st.caption("_No stories under this epic._")
+                    for story in stories:
+                        pri = story.get("priority")
+                        pts = story.get("story_points")
+                        meta = " · ".join(
+                            x for x in (
+                                f"Priority: {pri}" if pri else "",
+                                f"{pts} pts" if pts else "",
+                            ) if x
+                        )
+                        line = f"- **{story.get('summary') or 'Untitled story'}**"
+                        if meta:
+                            line += f"  \n  _{meta}_"
+                        st.markdown(line)
+
             st.divider()
 
             # ── Push to Jira ──────────────────────────────────────────────────
+            st.subheader("Push to Jira")
             if not _user:
                 st.info("Sign in to push to Jira.")
             elif not jira_svc.is_configured(_user["id"]):
-                st.info("Connect your Jira account in **Settings** to push these "
-                        "epics & stories directly into Jira.")
+                st.info("Connect your Jira account in **Settings** to push this "
+                        "backlog into Jira.")
             else:
-                jira_settings = jira_svc.get_settings(_user["id"])
-                proj_key = jira_settings.get("project_key")
                 push_state = jira_svc.get_push_status(run.id)
-
                 if push_state and push_state["state"] == "running":
                     st.info("⏳ Pushing to Jira…")
                     time.sleep(2)
                     st.rerun()
-                elif not proj_key:
-                    st.warning("Pick a target project in **Settings** first.")
                 else:
-                    if st.button(f"🚀 Push to Jira ({proj_key})", key=f"push_{run.id}"):
-                        jira_svc.start_push(_user["id"], run.id)
-                        st.rerun()
+                    cur_key = jira_svc.get_settings(_user["id"]).get("project_key", "")
+
+                    if st.button("🔄 Load my Jira projects", key=f"loadproj_{run.id}"):
+                        try:
+                            st.session_state.jira_projects = jira_svc.list_projects(_user["id"])
+                            if not st.session_state.jira_projects:
+                                st.warning("No projects visible to this account.")
+                        except JiraError as e:
+                            st.error(f"Could not load projects: {e.message}")
+
+                    jira_projects = st.session_state.get("jira_projects", [])
+                    target_key = cur_key
+                    if jira_projects:
+                        labels = [f"{p['name']} ({p['key']})" for p in jira_projects]
+                        keys = [p["key"] for p in jira_projects]
+                        idx = keys.index(cur_key) if cur_key in keys else 0
+                        choice = st.selectbox("Push into which project?", labels,
+                                              index=idx, key=f"projsel_{run.id}")
+                        target_key = keys[labels.index(choice)]
+                    elif cur_key:
+                        st.caption(f"Target project: **{cur_key}** — "
+                                   "click *Load my Jira projects* to change it.")
+
+                    if not target_key:
+                        st.warning("Load your Jira projects and pick one to push into.")
+                    else:
+                        if st.button(
+                            f"🚀 Push {len(epics)} epics + {total_stories} stories → {target_key}",
+                            key=f"push_{run.id}", type="primary",
+                        ):
+                            if target_key != cur_key:
+                                jira_svc.save_project_selection(_user["id"], target_key)
+                            jira_svc.start_push(_user["id"], run.id)
+                            st.rerun()
+
                     if push_state and push_state["state"] == "done":
                         st.success(
                             f"Done — {push_state['created']} created, "
@@ -538,9 +602,9 @@ elif page == "View Results":
                     st.dataframe(
                         [
                             {
-                                "Local ID": r.local_id,
+                                "Title": r.local_id,
                                 "Type": r.issuetype,
-                                "Jira": r.jira_key or "—",
+                                "Jira key": r.jira_key or "—",
                                 "Status": r.status,
                                 "Link": r.jira_url or "",
                                 "Notes": r.detail or "",
@@ -551,11 +615,6 @@ elif page == "View Results":
                         hide_index=True,
                         use_container_width=True,
                     )
-
-            st.divider()
-            st.json(json.loads(jira_output.content))
-        else:
-            st.info("Jira export not yet generated.")
 
     with tab4:
         st.caption("Drag the downloaded SVG into a Figma frame, or use File → Import.")
@@ -584,20 +643,6 @@ elif page == "View Results":
             st.components.v1.html(ux_flow_output.content, height=700, scrolling=True)
         else:
             st.info("UX flow not yet generated.")
-
-    st.divider()
-
-    with st.expander("Raw Framework JSON (Node 2 output)"):
-        if framework_output:
-            st.json(json.loads(framework_output.content))
-        else:
-            st.caption("Not available.")
-
-    with st.expander("Cleaned Meeting Document (Node 1 output)"):
-        if ingestion_output:
-            st.text(ingestion_output.content)
-        else:
-            st.caption("Not available.")
 
 
 # ── Page: Settings ──────────────────────────────────────────────────────────
