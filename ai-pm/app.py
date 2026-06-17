@@ -347,15 +347,19 @@ elif page == "Project Detail":
     st.markdown(_status_badge(project.status, STATUS_COLORS), unsafe_allow_html=True)
 
     # ── Share (owner only, within organization) ─────────────────────────────────
-    if config.auth_enabled:
+    if config.auth_enabled and auth_ui.is_owner(project):
         _shareable = svc.shareable_users(auth_ui.current_owner_id())
-        if _shareable:
-            _share_labels = {f"{u.username} ({u.email})": u.id for u in _shareable}
-            _current_share_ids = set(svc.get_share_user_ids(project_id))
-            with st.expander(
-                f"🔗 Share this project — deliverables, read-only "
-                f"({len(_current_share_ids)} shared)"
-            ):
+        _current_share_ids = set(svc.get_share_user_ids(project_id))
+        with st.expander(
+            f"🔗 Share this project — deliverables, read-only "
+            f"({len(_current_share_ids)} shared)"
+        ):
+            if not _shareable:
+                st.caption("No one else is in your organization yet. Ask your admin to "
+                           "add teammates to your organization, then you can share this "
+                           "project's deliverables with them.")
+            else:
+                _share_labels = {f"{u.username} ({u.email})": u.id for u in _shareable}
                 _default = [l for l, uid in _share_labels.items() if uid in _current_share_ids]
                 _picked = st.multiselect(
                     "Share with people in your organization", list(_share_labels.keys()),
