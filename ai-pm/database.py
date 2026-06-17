@@ -22,6 +22,8 @@ Base = declarative_base()
 _MIGRATIONS = {
     "users": {
         "jira_settings_enc": "TEXT",
+        "org_id": "VARCHAR",
+        "plan": "VARCHAR DEFAULT 'free'",
     },
     "projects": {
         "owner_id": "VARCHAR",
@@ -36,6 +38,7 @@ _MIGRATIONS = {
         "output_style": "VARCHAR",
         "document_ids": "JSON",
         "method": "VARCHAR",
+        "mode": "VARCHAR DEFAULT 'free'",
     },
 }
 

@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime
 
 from database import SessionLocal
-from models import Document, GeneratedOutput, PipelineRun, Project
+from models import (Document, GeneratedOutput, PipelineRun, Project,
+                    ProjectShare, User)
 from runtime import set_llm_override
 from storage import get_storage
 
@@ -126,11 +127,13 @@ def run_pipeline(
     persona_override: str | None = None,
     output_style: str | None = None,
     document_ids: list[str] | None = None,
-    llm_settings: dict | None = None,
+    mode: str = "free",
 ) -> str:
-    # Runs in a background thread; bind this user's LLM settings to this run so
-    # every node uses their provider/keys/models (falls back to global config).
-    set_llm_override(llm_settings)
+    # Runs in a background thread; bind the platform LLM config for the chosen
+    # tier (free | pro) to this run so every node uses it (blank fields fall back
+    # to the global .env config).
+    import services.platform_service as platform_service
+    set_llm_override(platform_service.resolve_mode(mode))
 
     from pipeline.graph import compiled_graph
 
@@ -153,6 +156,7 @@ def run_pipeline(
             output_style=output_style or "Plain English",
             document_ids=selected_ids,
             method="AI",
+            mode=mode if mode in ("free", "pro") else "free",
             stage_statuses={
                 "ingestion": "pending",
                 "framework": "pending",
@@ -272,12 +276,22 @@ def run_display_status(run: PipelineRun) -> str:
     return "pending"
 
 
-def regenerate_visuals(run_id: str, llm_settings: dict | None = None) -> None:
+def regenerate_visuals(run_id: str, mode: str | None = None) -> None:
     """Re-run wireframe + UX flow nodes against an existing run, reusing the
     cached framework JSON and PRD markdown. Lets users iterate on the visuals
-    without paying for framework + PRD generation again."""
+    without paying for framework + PRD generation again. Uses the same tier the
+    run was generated with unless an explicit mode is given."""
     import json
-    set_llm_override(llm_settings)
+    import services.platform_service as platform_service
+
+    if mode is None:
+        db = SessionLocal()
+        try:
+            r = db.query(PipelineRun).filter_by(id=run_id).first()
+            mode = (r.mode if r else None) or "free"
+        finally:
+            db.close()
+    set_llm_override(platform_service.resolve_mode(mode))
     from pipeline.nodes.wireframe import wireframe_node
     from pipeline.nodes.ux_flow import ux_flow_node
 
@@ -357,6 +371,80 @@ def get_output(project_id: str, run_id: str, stage: str) -> GeneratedOutput | No
         return db.query(GeneratedOutput).filter_by(
             project_id=project_id, run_id=run_id, stage=stage
         ).first()
+    finally:
+        db.close()
+
+
+# ── Sharing (org-scoped, read-only deliverables) ──────────────────────────────
+
+def shareable_users(owner_id: str) -> list[User]:
+    """Users the owner may share with: everyone in the owner's organization
+    except the owner. Empty if the owner has no org."""
+    db = SessionLocal()
+    try:
+        owner = db.query(User).filter_by(id=owner_id).first()
+        if not owner or not owner.org_id:
+            return []
+        return (
+            db.query(User)
+            .filter(User.org_id == owner.org_id, User.id != owner_id)
+            .order_by(User.username)
+            .all()
+        )
+    finally:
+        db.close()
+
+
+def get_share_user_ids(project_id: str) -> list[str]:
+    db = SessionLocal()
+    try:
+        rows = db.query(ProjectShare.user_id).filter_by(project_id=project_id).all()
+        return [uid for (uid,) in rows]
+    finally:
+        db.close()
+
+
+def set_project_shares(project_id: str, user_ids: list[str]) -> None:
+    """Replace the project's share list with the given users."""
+    wanted = set(user_ids or [])
+    db = SessionLocal()
+    try:
+        existing = {s.user_id: s for s in
+                    db.query(ProjectShare).filter_by(project_id=project_id).all()}
+        # remove shares no longer wanted
+        for uid, share in existing.items():
+            if uid not in wanted:
+                db.delete(share)
+        # add new shares
+        for uid in wanted:
+            if uid not in existing:
+                db.add(ProjectShare(project_id=project_id, user_id=uid))
+        db.commit()
+    finally:
+        db.close()
+
+
+def is_shared_with(project_id: str, user_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        return db.query(ProjectShare).filter_by(
+            project_id=project_id, user_id=user_id
+        ).first() is not None
+    finally:
+        db.close()
+
+
+def get_shared_with_me(user_id: str) -> list[Project]:
+    """Projects another user has shared with this user."""
+    db = SessionLocal()
+    try:
+        return (
+            db.query(Project)
+            .join(ProjectShare, ProjectShare.project_id == Project.id)
+            .filter(ProjectShare.user_id == user_id)
+            .order_by(Project.created_at.desc())
+            .all()
+        )
     finally:
         db.close()
 

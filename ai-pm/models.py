@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean, LargeBinary
+from sqlalchemy import (Column, String, Text, DateTime, ForeignKey, Boolean,
+                        LargeBinary, UniqueConstraint)
 from sqlalchemy.types import JSON
 from sqlalchemy.orm import relationship
 from database import Base
@@ -8,6 +9,27 @@ from database import Base
 
 def _uuid():
     return str(uuid.uuid4())
+
+
+class Organization(Base):
+    """A client/tenant. Admin provisions users into an org; project sharing is
+    scoped within an org (Phase 3)."""
+    __tablename__ = "organizations"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    name = Column(String, nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PlatformSettings(Base):
+    """Singleton row holding platform-owned LLM config: the API keys and the
+    Free/Pro tier definitions. Admin-managed; the whole blob is Fernet-encrypted
+    (it contains API keys). See services/platform_service.py."""
+    __tablename__ = "platform_settings"
+
+    id = Column(String, primary_key=True, default="platform")  # always "platform"
+    data_enc = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class User(Base):
@@ -18,6 +40,11 @@ class User(Base):
     email = Column(String, nullable=False, unique=True, index=True)
     password_hash = Column(String, nullable=False)
     role = Column(String, default="user")          # user | admin
+    # Client org this user belongs to (null for the platform admin).
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="SET NULL"),
+                    nullable=True, index=True)
+    # Subscription tier: which generation mode(s) the user may use.
+    plan = Column(String, default="free")          # free | pro  (pro can use both)
     created_at = Column(DateTime, default=datetime.utcnow)
     # Fernet-encrypted JSON of this user's LLM settings (provider, keys, models).
     # Never stored in plaintext. See crypto.py.
@@ -58,6 +85,20 @@ class Project(Base):
     generated_outputs = relationship("GeneratedOutput", back_populates="project", cascade="all, delete-orphan")
 
 
+class ProjectShare(Base):
+    """A project shared (read-only, deliverables-only) with another user. Sharing
+    is scoped within an organization — see services/project_service.py."""
+    __tablename__ = "project_shares"
+    __table_args__ = (UniqueConstraint("project_id", "user_id", name="uq_project_user_share"),)
+
+    id = Column(String, primary_key=True, default=_uuid)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"),
+                        index=True, nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"),
+                     index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -83,6 +124,7 @@ class PipelineRun(Base):
     output_style = Column(String, nullable=True)       # Plain English | Technical | Concise | Detailed
     document_ids = Column(JSON, default=list)          # documents this run used
     method = Column(String, default="AI")
+    mode = Column(String, default="free")              # free | pro  (which tier was used)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     current_stage = Column(String, default="pending")

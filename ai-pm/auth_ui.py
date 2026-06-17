@@ -50,15 +50,39 @@ def current_llm_settings() -> dict | None:
     return st.session_state.get("llm_settings") or None
 
 
-def can_access(project) -> bool:
-    """Whether the current session may view/edit this project."""
+def current_plan() -> str:
+    """The active user's subscription tier. Auth-disabled local dev has no user,
+    so grant full access ('pro')."""
+    user = current_user()
+    return (user or {}).get("plan", "pro")
+
+
+def is_owner(project) -> bool:
+    """Whether the current session owns this project (full edit/run access)."""
     if not config.auth_enabled:
         return True
     user = current_user()
     if not user:
         return False
-    # Projects created before auth existed have no owner — treat as accessible.
+    # Projects created before auth existed have no owner — treat as owned.
     return project.owner_id in (None, user["id"])
+
+
+def can_view(project) -> bool:
+    """Whether the current session may view this project — the owner, or a user
+    it has been shared with (read-only, deliverables only)."""
+    if is_owner(project):
+        return True
+    user = current_user()
+    if not user:
+        return False
+    import services.project_service as svc  # lazy to avoid import cycle
+    return svc.is_shared_with(project.id, user["id"])
+
+
+# Backwards-compatible alias (older call sites). Equivalent to can_view.
+def can_access(project) -> bool:
+    return can_view(project)
 
 
 def _login(user) -> None:
@@ -70,8 +94,8 @@ def _login(user) -> None:
         "username": user.username,
         "email": user.email,
         "role": user.role,
+        "plan": getattr(user, "plan", "free") or "free",
     }
-    st.session_state.llm_settings = auth.get_llm_settings(user.id)
     st.session_state.pop("_cookie_written", None)  # trigger a fresh cookie write
 
 

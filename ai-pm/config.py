@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # Auth / accounts
     auth_enabled: bool = False        # True → login required (hosted deploy)
-    allow_registration: bool = True   # True → show the "Create account" tab on login
+    allow_registration: bool = False  # admin-provisioned accounts; no public signup
     app_secret_key: str = ""          # Fernet key for encrypting per-user LLM keys at rest
     app_base_url: str = ""            # public URL, used to build password-reset links
     seed_admin_username: str = ""     # optional: auto-create this admin user on startup

@@ -55,7 +55,8 @@ def get_user_by_login(identifier: str) -> User | None:
 
 # ── Account management ──────────────────────────────────────────────────────
 
-def create_user(username: str, email: str, password: str, role: str = "user") -> User:
+def create_user(username: str, email: str, password: str, role: str = "user",
+                org_id: str | None = None, plan: str = "free") -> User:
     db = SessionLocal()
     try:
         user = User(
@@ -63,6 +64,8 @@ def create_user(username: str, email: str, password: str, role: str = "user") ->
             email=email.strip().lower(),
             password_hash=hash_password(password),
             role=role,
+            org_id=org_id,
+            plan=plan,
         )
         db.add(user)
         db.commit()
