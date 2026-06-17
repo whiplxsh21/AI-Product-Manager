@@ -48,17 +48,19 @@ auth_ui.ensure_authenticated()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+# Status colors: brand blue for in-progress, Slate for neutral, semantic
+# green/red/amber for done/failed/waiting.
 STATUS_COLORS = {
-    "idle": "#6b7280",
-    "running": "#3b82f6",
+    "idle": "#40586D",              # Slate 500
+    "running": "#0672CB",           # Blue 600
     "awaiting_approval": "#f59e0b",
     "complete": "#10b981",
     "failed": "#ef4444",
 }
 
 STAGE_COLORS = {
-    "pending": "#6b7280",
-    "running": "#3b82f6",
+    "pending": "#40586D",           # Slate 500
+    "running": "#0672CB",           # Blue 600
     "complete": "#10b981",
     "failed": "#ef4444",
     "awaiting": "#f59e0b",
@@ -376,8 +378,8 @@ elif page == "Project Detail":
     st.divider()
 
     _FILE_TYPE_COLORS = {
-        "transcript": "#6366f1",
-        "docx": "#6366f1",
+        "transcript": "#0672CB",    # Blue 600
+        "docx": "#1885C3",          # Light Blue 500
         "pdf": "#f59e0b",
         "pptx": "#f59e0b",
         "image": "#10b981",

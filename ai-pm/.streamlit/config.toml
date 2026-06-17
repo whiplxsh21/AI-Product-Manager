@@ -1,0 +1,12 @@
+# PM Pilot theme — client design system (blue-forward, light, clean).
+# Palette: Blue 600 #0672CB (primary), Slate neutrals, Light Blue accents.
+# This recolors the whole app; it does not change any layout, buttons, or options.
+[theme]
+base = "light"
+primaryColor = "#0672CB"             # Blue 600 — primary interaction (buttons, active nav, focus)
+backgroundColor = "#FFFFFF"          # main canvas
+secondaryBackgroundColor = "#EBF1F6" # Slate 100 — sidebar + cards/inputs/code surfaces
+textColor = "#1D2C3B"                # Slate 700 — high-contrast body text
+linkColor = "#0063B8"                # Blue 700 — links
+borderColor = "#C5D4E3"              # Slate 200 — subtle borders & dividers
+font = "sans serif"
