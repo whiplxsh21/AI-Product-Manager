@@ -37,6 +37,29 @@ def _loads_json(text: str) -> dict:
             raise
 
 
+def _try_parse(text: str) -> dict | None:
+    """Parse JSON tolerantly, returning None instead of raising so callers can
+    decide whether to retry."""
+    try:
+        return _loads_json(text)
+    except Exception:  # noqa: BLE001 — any parse/repair failure → retry path
+        return None
+
+
+def _is_usable_framework(fw) -> bool:
+    """A framework is only usable if it carries at least one epic with stories —
+    otherwise the BDD (Node 4) and Jira (Node 5) transforms produce empty files."""
+    if not isinstance(fw, dict):
+        return False
+    epics = fw.get("epics")
+    if not isinstance(epics, list) or not epics:
+        return False
+    return any(
+        isinstance(e, dict) and isinstance(e.get("user_stories"), list) and e["user_stories"]
+        for e in epics
+    )
+
+
 def framework_node(state: PipelineState) -> PipelineState:
     db = SessionLocal()
     try:
@@ -68,16 +91,30 @@ def framework_node(state: PipelineState) -> PipelineState:
 
         response = invoke_with_fallback(llms, [system_msg, human_msg])
 
-        try:
-            framework = _loads_json(response.content)
-        except json.JSONDecodeError:
+        # Parse + validate. A salvaged-but-incomplete framework (e.g. json_repair
+        # closing a truncated/malformed response and dropping the "epics" array)
+        # must NOT pass silently — that produces empty BDD stories and Jira
+        # export downstream. Retry once with a corrective prompt, then fail loud.
+        framework = _try_parse(response.content)
+        if not _is_usable_framework(framework):
             retry_response = invoke_with_fallback(llms, [
                 system_msg,
                 human_msg,
                 AIMessage(content=response.content),
-                HumanMessage(content="The previous response was not valid JSON. Return ONLY a valid JSON object with no other text, no markdown fences, no preamble."),
+                HumanMessage(content=(
+                    "The previous response was not valid JSON or was missing the "
+                    "required non-empty \"epics\" array (each epic needs "
+                    "\"user_stories\"). Return ONLY one complete, valid JSON object "
+                    "matching the schema exactly — no markdown fences, no preamble."
+                )),
             ])
-            framework = _loads_json(retry_response.content)
+            framework = _try_parse(retry_response.content)
+
+        if not _is_usable_framework(framework):
+            raise ValueError(
+                "Framework analysis returned no epics / user stories — the model "
+                "output was incomplete or malformed. Please click Generate again."
+            )
 
         db = SessionLocal()
         try:
