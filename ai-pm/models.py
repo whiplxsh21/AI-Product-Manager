@@ -79,6 +79,10 @@ class Project(Base):
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="idle")  # idle | running | awaiting_approval | complete | failed
+    # When true, the project's deliverables are shared (read-only) with EVERYONE
+    # in the owner's organization, including members who join later. This is
+    # distinct from per-user ProjectShare rows — see services/project_service.py.
+    shared_with_org = Column(Boolean, default=False, nullable=False)
 
     documents = relationship("Document", back_populates="project", cascade="all, delete-orphan")
     pipeline_runs = relationship("PipelineRun", back_populates="project", cascade="all, delete-orphan")

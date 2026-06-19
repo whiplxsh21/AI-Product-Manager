@@ -352,25 +352,56 @@ elif page == "Project Detail":
     if config.auth_enabled and auth_ui.is_owner(project):
         _shareable = svc.shareable_users(auth_ui.current_owner_id())
         _current_share_ids = set(svc.get_share_user_ids(project_id))
+        _org_shared = svc.is_org_shared(project_id)
+        _share_summary = ("🌐 shared with entire organization" if _org_shared
+                          else f"{len(_current_share_ids)} shared")
         with st.expander(
-            f"🔗 Share this project — deliverables, read-only "
-            f"({len(_current_share_ids)} shared)"
+            f"🔗 Share this project — deliverables, read-only ({_share_summary})"
         ):
             if not _shareable:
                 st.caption("No one else is in your organization yet. Ask your admin to "
                            "add teammates to your organization, then you can share this "
                            "project's deliverables with them.")
             else:
+                # ── Mode 1: share with the WHOLE organization (one click) ────────
+                if _org_shared:
+                    st.success("🌐 **Shared with your entire organization** — everyone "
+                               "in your org (including people who join later) has "
+                               "read-only access to the deliverables.")
+                    if st.button("Stop sharing with the whole organization",
+                                 key=f"orgoff_{project_id}"):
+                        svc.set_project_org_share(project_id, False)
+                        st.rerun()
+                else:
+                    st.markdown("##### 🌐 Share with everyone in your organization")
+                    st.caption("One click gives every current and future member of "
+                               "your organization read-only access — no need to pick "
+                               "people individually.")
+                    if st.button("🌐 Share with the entire organization",
+                                 key=f"orgon_{project_id}", type="primary",
+                                 use_container_width=True):
+                        svc.set_project_org_share(project_id, True)
+                        st.rerun()
+
+                st.divider()
+
+                # ── Mode 2: share with specific people (existing behaviour) ──────
+                st.markdown("##### 👤 Or share with specific people")
                 _share_labels = {f"{u.username} ({u.email})": u.id for u in _shareable}
                 _default = [l for l, uid in _share_labels.items() if uid in _current_share_ids]
                 _picked = st.multiselect(
                     "Share with people in your organization", list(_share_labels.keys()),
                     default=_default, key=f"share_{project_id}",
+                    disabled=_org_shared,
                     help="They get read-only access to this project's deliverables "
                          "(PRD, BDD, Jira export, wireframe, UX flow) under their "
                          "'Shared with me' tab. They can't see your source materials "
                          "or edit/run the project.")
-                if st.button("Save sharing", key=f"savesh_{project_id}"):
+                if _org_shared:
+                    st.caption("Individual selection is disabled while the project is "
+                               "shared with the whole organization.")
+                if st.button("Save sharing", key=f"savesh_{project_id}",
+                             disabled=_org_shared):
                     svc.set_project_shares(project_id, [_share_labels[l] for l in _picked])
                     st.success("Sharing updated.")
                     st.rerun()

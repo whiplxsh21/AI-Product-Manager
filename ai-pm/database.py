@@ -27,6 +27,7 @@ _MIGRATIONS = {
     },
     "projects": {
         "owner_id": "VARCHAR",
+        "shared_with_org": "BOOLEAN DEFAULT 0",
     },
     "documents": {
         "cleaned_text": "TEXT",

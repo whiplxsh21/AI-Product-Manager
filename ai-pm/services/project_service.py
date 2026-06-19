@@ -424,27 +424,80 @@ def set_project_shares(project_id: str, user_ids: list[str]) -> None:
         db.close()
 
 
+def is_org_shared(project_id: str) -> bool:
+    """Whether the project is shared with the owner's entire organization."""
+    db = SessionLocal()
+    try:
+        project = db.query(Project).filter_by(id=project_id).first()
+        return bool(project and project.shared_with_org)
+    finally:
+        db.close()
+
+
+def set_project_org_share(project_id: str, enabled: bool) -> None:
+    """Toggle organization-wide sharing for a project. When enabled, every
+    member of the owner's organization (including future joiners) gets read-only
+    access to the deliverables, independent of the per-user share list."""
+    db = SessionLocal()
+    try:
+        project = db.query(Project).filter_by(id=project_id).first()
+        if project:
+            project.shared_with_org = bool(enabled)
+            db.commit()
+    finally:
+        db.close()
+
+
 def is_shared_with(project_id: str, user_id: str) -> bool:
     db = SessionLocal()
     try:
-        return db.query(ProjectShare).filter_by(
+        # Explicit per-user share.
+        if db.query(ProjectShare).filter_by(
             project_id=project_id, user_id=user_id
-        ).first() is not None
+        ).first() is not None:
+            return True
+        # Org-wide share: the viewer must be in the project owner's organization.
+        project = db.query(Project).filter_by(id=project_id).first()
+        if not project or not project.shared_with_org or not project.owner_id:
+            return False
+        owner = db.query(User).filter_by(id=project.owner_id).first()
+        viewer = db.query(User).filter_by(id=user_id).first()
+        return bool(owner and viewer and owner.org_id
+                    and owner.org_id == viewer.org_id)
     finally:
         db.close()
 
 
 def get_shared_with_me(user_id: str) -> list[Project]:
-    """Projects another user has shared with this user."""
+    """Projects shared with this user — both explicit per-user shares and any
+    project in their organization shared org-wide. The user's own projects are
+    excluded."""
     db = SessionLocal()
     try:
-        return (
+        viewer = db.query(User).filter_by(id=user_id).first()
+
+        explicit = (
             db.query(Project)
             .join(ProjectShare, ProjectShare.project_id == Project.id)
             .filter(ProjectShare.user_id == user_id)
-            .order_by(Project.created_at.desc())
-            .all()
         )
+
+        projects = {p.id: p for p in explicit.all()}
+
+        if viewer and viewer.org_id:
+            org_shared = (
+                db.query(Project)
+                .join(User, User.id == Project.owner_id)
+                .filter(
+                    Project.shared_with_org.is_(True),
+                    User.org_id == viewer.org_id,
+                    Project.owner_id != user_id,
+                )
+            )
+            for p in org_shared.all():
+                projects.setdefault(p.id, p)
+
+        return sorted(projects.values(), key=lambda p: p.created_at, reverse=True)
     finally:
         db.close()
 
