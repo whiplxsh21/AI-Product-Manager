@@ -128,6 +128,7 @@ def run_pipeline(
     output_style: str | None = None,
     document_ids: list[str] | None = None,
     mode: str = "free",
+    prd_review: bool = False,
 ) -> str:
     # Runs in a background thread; bind the platform LLM config for the chosen
     # tier (free | pro) to this run so every node uses it (blank fields fall back
@@ -157,11 +158,13 @@ def run_pipeline(
             document_ids=selected_ids,
             method="AI",
             mode=mode if mode in ("free", "pro") else "free",
+            prd_review=bool(prd_review),
             stage_statuses={
                 "ingestion": "pending",
                 "framework": "pending",
                 "checkpoint": "pending",
                 "prd": "pending",
+                **({"prd_review": "pending"} if prd_review else {}),
                 "bdd": "pending",
                 "jira_format": "pending",
                 "wireframe": "pending",
@@ -195,6 +198,8 @@ def run_pipeline(
         "framework": {},
         "approval_status": "",
         "approval_notes": "",
+        "prd_review": bool(prd_review),
+        "prd_approved": False,
         "prd_markdown": "",
         "prd_storage_path": "",
         "bdd_storage_path": "",
@@ -221,6 +226,28 @@ def run_pipeline(
             if project:
                 project.status = "failed"
             db.commit()
+        finally:
+            db.close()
+        return run_id
+
+    # PRD-review pause: the graph stopped after PRD (the conditional edge routed
+    # to END). Mark the run as awaiting human review so the UI shows the review
+    # gate instead of treating the run as complete.
+    if prd_review:
+        db = SessionLocal()
+        try:
+            run = db.query(PipelineRun).filter_by(id=run_id).first()
+            project = db.query(Project).filter_by(id=project_id).first()
+            statuses = dict(run.stage_statuses or {})
+            # Only pause if PRD actually succeeded and we haven't already gone on.
+            if statuses.get("prd") == "complete" and statuses.get("bdd") != "complete":
+                statuses["prd_review"] = "awaiting"
+                run.stage_statuses = statuses
+                run.current_stage = "prd_review"
+                run.approval_status = "pending"
+                if project:
+                    project.status = "awaiting_approval"
+                db.commit()
         finally:
             db.close()
 
@@ -373,6 +400,160 @@ def get_output(project_id: str, run_id: str, stage: str) -> GeneratedOutput | No
         ).first()
     finally:
         db.close()
+
+
+# ── PRD review (human-in-the-loop after PRD, before remaining deliverables) ───
+
+def extract_markdown_from_upload(filename: str, file_bytes: bytes) -> str:
+    """Convert an uploaded edited-PRD file (.md/.txt/.docx/.pdf) back into
+    markdown/plain text so it can replace a run's PRD content. Reuses the same
+    extraction libraries as the ingestion node."""
+    import os
+    import tempfile
+
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext in ("md", "markdown", "txt"):
+        return file_bytes.decode("utf-8", errors="replace")
+
+    if ext in ("docx", "doc"):
+        import docx as python_docx
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        try:
+            document = python_docx.Document(tmp_path)
+            return "\n\n".join(p.text for p in document.paragraphs if p.text.strip())
+        finally:
+            os.remove(tmp_path)
+
+    if ext == "pdf":
+        import pymupdf4llm
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        try:
+            return pymupdf4llm.to_markdown(tmp_path)
+        finally:
+            os.remove(tmp_path)
+
+    # Unknown extension — best-effort decode rather than failing the upload.
+    return file_bytes.decode("utf-8", errors="replace")
+
+
+def update_prd_content(run_id: str, new_markdown: str) -> None:
+    """Replace a run's stored PRD with edited markdown (from in-site editing or
+    an uploaded edited document). Updates both the GeneratedOutput row and the
+    PRD file in storage so downstream nodes and downloads see the new version."""
+    db = SessionLocal()
+    try:
+        run = db.query(PipelineRun).filter_by(id=run_id).first()
+        if not run:
+            raise ValueError(f"Run {run_id} not found")
+        project_id = run.project_id
+        output = db.query(GeneratedOutput).filter_by(
+            run_id=run_id, stage="prd"
+        ).first()
+        if output:
+            output.content = new_markdown
+        db.commit()
+    finally:
+        db.close()
+
+    get_storage().save(project_id, f"{run_id}_prd.md", new_markdown)
+
+
+def continue_after_prd_review(run_id: str, edited_prd: str | None = None,
+                              mode: str | None = None) -> None:
+    """Resume a PRD-review run: optionally apply an edited PRD, then generate the
+    remaining deliverables (BDD → Jira → wireframe → UX flow) by running those
+    nodes directly. Runs in a background thread from the UI. Mirrors the partial
+    execution pattern used by regenerate_visuals()."""
+    import json
+    import services.platform_service as platform_service
+
+    if edited_prd is not None and edited_prd.strip():
+        update_prd_content(run_id, edited_prd)
+
+    if mode is None:
+        db = SessionLocal()
+        try:
+            r = db.query(PipelineRun).filter_by(id=run_id).first()
+            mode = (r.mode if r else None) or "free"
+        finally:
+            db.close()
+    set_llm_override(platform_service.resolve_mode(mode))
+
+    from pipeline.nodes.bdd_stories import bdd_node
+    from pipeline.nodes.jira_format import jira_format_node
+    from pipeline.nodes.wireframe import wireframe_node
+    from pipeline.nodes.ux_flow import ux_flow_node
+
+    db = SessionLocal()
+    try:
+        run = db.query(PipelineRun).filter_by(id=run_id).first()
+        if not run:
+            raise ValueError(f"Run {run_id} not found")
+        project_id = run.project_id
+
+        fw_out = db.query(GeneratedOutput).filter_by(run_id=run_id, stage="framework").first()
+        prd_out = db.query(GeneratedOutput).filter_by(run_id=run_id, stage="prd").first()
+        if not fw_out or not prd_out:
+            raise ValueError("Cannot continue: run is missing framework or PRD output")
+
+        statuses = dict(run.stage_statuses or {})
+        statuses["prd_review"] = "complete"
+        for stage in ("bdd", "jira_format", "wireframe", "ux_flow"):
+            statuses[stage] = "pending"
+        run.stage_statuses = statuses
+        run.approval_status = "approved"
+        run.current_stage = "bdd"
+        run.error = None
+        run.completed_at = None
+        project = db.query(Project).filter_by(id=project_id).first()
+        if project:
+            project.status = "running"
+        db.commit()
+
+        framework = json.loads(fw_out.content)
+        prd_markdown = prd_out.content
+        title = run.title or ""
+        details = run.requirement_details or ""
+        persona = run.persona_override or ""
+        style = run.output_style or "Plain English"
+    finally:
+        db.close()
+
+    state = {
+        "project_id": project_id,
+        "run_id": run_id,
+        "documents": [],
+        "requirement_title": title,
+        "requirement_details": details,
+        "persona_override": persona,
+        "output_style": style,
+        "cleaned_content": "",
+        "framework": framework,
+        "approval_status": "approved",
+        "approval_notes": "",
+        "prd_review": True,
+        "prd_approved": True,
+        "prd_markdown": prd_markdown,
+        "prd_storage_path": "",
+        "bdd_storage_path": "",
+        "jira_storage_path": "",
+        "wireframe_storage_path": "",
+        "ux_flow_storage_path": "",
+        "current_stage": "bdd",
+        "errors": [],
+    }
+
+    # Each node records its own failure in stage_statuses + project.status, so a
+    # raised exception just propagates for the background thread to log.
+    state = bdd_node(state)
+    state = jira_format_node(state)
+    state = wireframe_node(state)
+    state = ux_flow_node(state)
 
 
 # ── Sharing (org-scoped, read-only deliverables) ──────────────────────────────

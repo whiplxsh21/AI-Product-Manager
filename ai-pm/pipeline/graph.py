@@ -18,6 +18,16 @@ def _route_after_checkpoint(state: PipelineState) -> str:
     return END
 
 
+def _route_after_prd(state: PipelineState) -> str:
+    # When PRD review is enabled, stop after PRD so the user can review/edit it
+    # before the remaining deliverables are generated. The run is resumed via
+    # services.project_service.continue_after_prd_review(), which runs the
+    # remaining nodes directly.
+    if state.get("prd_review") and not state.get("prd_approved"):
+        return END
+    return "bdd"
+
+
 def build_graph():
     graph = StateGraph(PipelineState)
 
@@ -39,7 +49,11 @@ def build_graph():
         END: END,
     })
 
-    graph.add_edge("prd", "bdd")
+    graph.add_conditional_edges("prd", _route_after_prd, {
+        "bdd": "bdd",
+        END: END,
+    })
+
     graph.add_edge("bdd", "jira_format")
     graph.add_edge("jira_format", "wireframe")
     graph.add_edge("wireframe", "ux_flow")

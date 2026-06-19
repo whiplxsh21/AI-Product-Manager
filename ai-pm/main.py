@@ -8,6 +8,7 @@ from config import config
 from database import create_tables
 from schemas import (
     ApprovalRequest,
+    ContinueReviewRequest,
     ProjectCreate,
     ProjectRead,
     DocumentRead,
@@ -98,6 +99,7 @@ def trigger_pipeline(project_id: str, body: RunRequest = RunRequest()):
             persona_override=body.persona_override,
             output_style=body.output_style,
             document_ids=body.document_ids,
+            prd_review=body.prd_review,
         )
 
     thread = threading.Thread(target=_run, daemon=True)
@@ -144,3 +146,21 @@ def reject_run(project_id: str, run_id: str, body: RejectRequest):
         raise HTTPException(status_code=400, detail="HITL is not enabled")
     svc.reject_run(run_id, body.notes)
     return {"message": "Run rejected"}
+
+
+@app.post("/projects/{project_id}/runs/{run_id}/continue", status_code=202)
+def continue_review(project_id: str, run_id: str,
+                    body: ContinueReviewRequest = ContinueReviewRequest()):
+    """Resume a PRD-review run: optionally apply an edited PRD, then generate the
+    remaining deliverables (BDD, Jira, wireframe, UX flow) in the background."""
+    run = svc.get_run_status(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    def _continue():
+        svc.continue_after_prd_review(run_id, edited_prd=body.edited_prd)
+
+    thread = threading.Thread(target=_continue, daemon=True)
+    thread.start()
+    thread.join(timeout=0.1)
+    return {"message": "Generating remaining deliverables", "run_id": run_id}

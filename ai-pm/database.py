@@ -40,6 +40,7 @@ _MIGRATIONS = {
         "document_ids": "JSON",
         "method": "VARCHAR",
         "mode": "VARCHAR DEFAULT 'free'",
+        "prd_review": "BOOLEAN DEFAULT 0",
     },
 }
 

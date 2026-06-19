@@ -71,6 +71,7 @@ STAGE_LABELS = {
     "framework": "Framework Analysis",
     "checkpoint": "Approval Gate",
     "prd": "PRD Generation",
+    "prd_review": "PRD Review",
     "bdd": "BDD Stories",
     "jira_format": "Jira Export",
     "wireframe": "Wireframe Diagram",
@@ -507,6 +508,12 @@ elif page == "Project Detail":
             selected_labels = st.multiselect("Materials to consider",
                                              list(doc_labels.keys()),
                                              default=list(doc_labels.keys()))
+            prd_review = st.checkbox(
+                "⏸ Review the PRD before generating the rest", value=True,
+                help="Pause after the PRD is generated so you can approve, edit it "
+                     "in-site, or upload an edited version — then the BDD stories, "
+                     "Jira backlog, wireframe and UX flow are generated from your "
+                     "final PRD.")
             submitted = st.form_submit_button("✦ Generate PRD", type="primary",
                                               disabled=is_busy)
 
@@ -525,7 +532,8 @@ elif page == "Project Detail":
                            persona_override=persona.strip() or None,
                            output_style=style,
                            document_ids=selected_ids,
-                           mode=mode)
+                           mode=mode,
+                           prd_review=prd_review)
 
                 def _run_in_bg(c=cfg):
                     svc.run_pipeline(project_id, **c)
@@ -545,7 +553,9 @@ elif page == "Project Detail":
 
         stage_statuses = active_run.stage_statuses or {}
         for stage_key, label in STAGE_LABELS.items():
-            status = stage_statuses.get(stage_key, "pending")
+            if stage_key not in stage_statuses:
+                continue  # stage not part of this run (e.g. PRD review disabled)
+            status = stage_statuses[stage_key]
             rc1, rc2 = st.columns([3, 2])
             rc1.text(label)
             rc2.markdown(_status_badge(status, STAGE_COLORS), unsafe_allow_html=True)
@@ -577,6 +587,68 @@ elif page == "Project Detail":
                 if st.button("✗ Reject and Discard"):
                     svc.reject_run(active_run.id, notes)
                     st.rerun()
+
+        # ── PRD review gate (human-in-the-loop after PRD) ───────────────────────
+        if (active_run.prd_review and project.status == "awaiting_approval"
+                and stage_statuses.get("prd_review") == "awaiting"):
+            rid = active_run.id
+            st.warning("⏸ **PRD ready for review.** Approve it as-is, edit it here, or "
+                       "upload an edited version — then the BDD stories, Jira backlog, "
+                       "wireframe and UX flow are generated from your final PRD.")
+
+            prd_out = svc.get_output(project_id, rid, "prd")
+            prd_text = prd_out.content if prd_out else ""
+
+            with st.expander("Preview generated PRD", expanded=False):
+                st.markdown(prd_text or "_PRD is empty._")
+
+            st.markdown("**Download to edit in Word / PDF, then upload below:**")
+            _doc_download_buttons(prd_text, "prd", f"prdrev_{rid}")
+
+            tab_ok, tab_edit, tab_upload = st.tabs(
+                ["✓ Approve as-is", "✏ Edit here", "⬆ Upload edited PRD"]
+            )
+
+            def _continue_review(run_id, edited=None):
+                def _bg(r=run_id, e=edited):
+                    svc.continue_after_prd_review(r, edited_prd=e)
+                threading.Thread(target=_bg, daemon=True).start()
+                time.sleep(0.6)
+                st.rerun()
+
+            with tab_ok:
+                st.caption("Use the PRD exactly as generated.")
+                if st.button("✓ Approve & generate the rest", type="primary",
+                             key=f"prdok_{rid}"):
+                    _continue_review(rid)
+
+            with tab_edit:
+                edited = st.text_area("PRD markdown", value=prd_text, height=400,
+                                      key=f"prdtext_{rid}")
+                if st.button("💾 Save & generate the rest", type="primary",
+                             key=f"prdsave_{rid}"):
+                    if not edited.strip():
+                        st.error("The PRD can't be empty.")
+                    else:
+                        _continue_review(rid, edited=edited)
+
+            with tab_upload:
+                st.caption("Upload your edited PRD as .md, .docx or .pdf. It replaces "
+                           "the PRD, then the remaining deliverables are generated from it.")
+                up = st.file_uploader("Edited PRD", type=["md", "txt", "docx", "pdf"],
+                                      key=f"prdup_{rid}")
+                if up is not None and st.button(
+                        "⬆ Use this file & generate the rest", type="primary",
+                        key=f"prdupbtn_{rid}"):
+                    try:
+                        md = svc.extract_markdown_from_upload(up.name, up.read())
+                    except Exception as e:  # noqa: BLE001
+                        st.error(f"Could not read the file: {e}")
+                    else:
+                        if not md.strip():
+                            st.error("The uploaded file appears to be empty.")
+                        else:
+                            _continue_review(rid, edited=md)
 
     # ── Generations history ───────────────────────────────────────────────────────
     runs = svc.get_runs(project_id)

@@ -13,6 +13,8 @@ class PipelineState(TypedDict):
     framework: dict             # Output of Node 2 — parsed framework JSON
     approval_status: str        # auto_approved | pending | approved | rejected
     approval_notes: str         # Human reviewer notes (empty string if none)
+    prd_review: bool            # If True, pause after PRD before remaining deliverables
+    prd_approved: bool          # Set True when the user approves/continues past PRD review
     prd_markdown: str           # Output of Node 3
     prd_storage_path: str       # Path to saved prd.md
     bdd_storage_path: str       # Path to saved bdd_stories.md

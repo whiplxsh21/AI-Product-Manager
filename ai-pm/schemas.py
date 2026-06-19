@@ -46,6 +46,7 @@ class RunRequest(BaseModel):
     persona_override: Optional[str] = None
     output_style: Optional[str] = None
     document_ids: Optional[list[str]] = None
+    prd_review: bool = False
 
 
 class PipelineRunRead(BaseModel):
@@ -93,3 +94,9 @@ class ApprovalRequest(BaseModel):
 
 class RejectRequest(BaseModel):
     notes: str = ""
+
+
+class ContinueReviewRequest(BaseModel):
+    # Optional edited PRD markdown to apply before generating the remaining
+    # deliverables. Omit/leave empty to approve the PRD as-is.
+    edited_prd: Optional[str] = None

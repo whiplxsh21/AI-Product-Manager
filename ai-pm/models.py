@@ -142,6 +142,9 @@ class PipelineRun(Base):
     })
     approval_status = Column(String, default="not_required")  # not_required | pending | approved | rejected
     approval_notes = Column(Text, nullable=True)
+    # When true, this run pauses after PRD generation for human review before the
+    # remaining deliverables (BDD, Jira, wireframe, UX flow) are generated.
+    prd_review = Column(Boolean, default=False, nullable=False)
     error = Column(Text, nullable=True)
 
     project = relationship("Project", back_populates="pipeline_runs")
