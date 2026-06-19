@@ -27,7 +27,7 @@ _MIGRATIONS = {
     },
     "projects": {
         "owner_id": "VARCHAR",
-        "shared_with_org": "BOOLEAN DEFAULT 0",
+        "shared_with_org": "BOOLEAN DEFAULT FALSE",
     },
     "documents": {
         "cleaned_text": "TEXT",
@@ -40,7 +40,7 @@ _MIGRATIONS = {
         "document_ids": "JSON",
         "method": "VARCHAR",
         "mode": "VARCHAR DEFAULT 'free'",
-        "prd_review": "BOOLEAN DEFAULT 0",
+        "prd_review": "BOOLEAN DEFAULT FALSE",
     },
 }
 
