@@ -4,17 +4,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
-from config import config
 from database import create_tables
 from schemas import (
-    ApprovalRequest,
     ContinueReviewRequest,
     ProjectCreate,
     ProjectRead,
     DocumentRead,
     PipelineRunRead,
     GeneratedOutputRead,
-    RejectRequest,
     RunRequest,
 )
 import services.project_service as svc
@@ -130,23 +127,7 @@ def get_output(project_id: str, stage: str, run_id: str):
     return GeneratedOutputRead.model_validate(output)
 
 
-# ── HITL (V2 — gated) ─────────────────────────────────────────────────────────
-
-@app.post("/projects/{project_id}/runs/{run_id}/approve", status_code=200)
-def approve_run(project_id: str, run_id: str, body: ApprovalRequest):
-    if not config.hitl_enabled:
-        raise HTTPException(status_code=400, detail="HITL is not enabled")
-    svc.approve_run(run_id, body.notes, body.edited_framework)
-    return {"message": "Run approved"}
-
-
-@app.post("/projects/{project_id}/runs/{run_id}/reject", status_code=200)
-def reject_run(project_id: str, run_id: str, body: RejectRequest):
-    if not config.hitl_enabled:
-        raise HTTPException(status_code=400, detail="HITL is not enabled")
-    svc.reject_run(run_id, body.notes)
-    return {"message": "Run rejected"}
-
+# ── PRD review (human-in-the-loop) ────────────────────────────────────────────
 
 @app.post("/projects/{project_id}/runs/{run_id}/continue", status_code=202)
 def continue_review(project_id: str, run_id: str,

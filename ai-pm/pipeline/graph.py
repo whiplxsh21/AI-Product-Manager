@@ -1,6 +1,5 @@
 from langgraph.graph import END, StateGraph
 
-from config import config
 from pipeline.nodes.bdd_stories import bdd_node
 from pipeline.nodes.checkpoint import checkpoint_node
 from pipeline.nodes.framework import framework_node
@@ -58,11 +57,6 @@ def build_graph():
     graph.add_edge("jira_format", "wireframe")
     graph.add_edge("wireframe", "ux_flow")
     graph.add_edge("ux_flow", END)
-
-    if config.hitl_enabled:
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        checkpointer = SqliteSaver.from_conn_string("./pipeline_checkpoints.db")
-        return graph.compile(checkpointer=checkpointer)
 
     return graph.compile()
 

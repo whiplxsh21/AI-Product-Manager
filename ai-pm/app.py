@@ -570,24 +570,6 @@ elif page == "Project Detail":
             st.error(f"Pipeline failed: {active_run.error or 'Unknown error'}")
             st.caption("Adjust your inputs and click Generate PRD to try again.")
 
-        if config.hitl_enabled and project.status == "awaiting_approval":
-            st.warning("⏸ Paused — review the framework before generating the PRD")
-            framework_output = svc.get_output(project_id, active_run.id, "framework")
-            if framework_output:
-                st.json(json.loads(framework_output.content))
-            notes = st.text_area("Notes or corrections for the PRD writer (optional)",
-                                 key="approval_notes")
-            approve_col, reject_col = st.columns(2)
-            with approve_col:
-                if st.button("✓ Approve and Generate PRD", type="primary"):
-                    fw = json.loads(framework_output.content) if framework_output else {}
-                    svc.approve_run(active_run.id, notes, fw)
-                    st.rerun()
-            with reject_col:
-                if st.button("✗ Reject and Discard"):
-                    svc.reject_run(active_run.id, notes)
-                    st.rerun()
-
         # ── PRD review gate (human-in-the-loop after PRD) ───────────────────────
         if (active_run.prd_review and project.status == "awaiting_approval"
                 and stage_statuses.get("prd_review") == "awaiting"):

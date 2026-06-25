@@ -87,15 +87,6 @@ class GeneratedOutputRead(BaseModel):
     created_at: datetime
 
 
-class ApprovalRequest(BaseModel):
-    notes: str = ""
-    edited_framework: dict = {}
-
-
-class RejectRequest(BaseModel):
-    notes: str = ""
-
-
 class ContinueReviewRequest(BaseModel):
     # Optional edited PRD markdown to apply before generating the remaining
     # deliverables. Omit/leave empty to approve the PRD as-is.

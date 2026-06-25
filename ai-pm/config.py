@@ -49,11 +49,7 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     email_from: str = "PM Pilot <onboarding@resend.dev>"
 
-    # Pipeline
-    hitl_enabled: bool = False
-
     # Jira
-    jira_enabled: bool = False
     jira_base_url: str = ""
     jira_email: str = ""
     jira_api_token: str = ""

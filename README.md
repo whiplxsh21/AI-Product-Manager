@@ -89,10 +89,9 @@ Ingestion → Framework → Checkpoint → PRD → BDD → Jira format → Wiref
 - **Configurable transcript cleaning** — local regex (no LLM calls) or LLM-based.
 
 ### Human-in-the-loop
-- **Framework review** (HITL) — optionally pause after the analysis stage to
-  review and edit the framework before the PRD is written.
-- **PRD review** — optionally pause after the PRD so a human can review/edit it
-  before the remaining artifacts are generated.
+- **PRD review** — pause after the PRD so a human can review, edit in-site, or
+  upload an edited version before the remaining artifacts are generated. On by
+  default per project (toggleable with the "Review the PRD" checkbox).
 
 ### Jira
 - **JSON export** in a schema designed to be pushed directly to Jira.

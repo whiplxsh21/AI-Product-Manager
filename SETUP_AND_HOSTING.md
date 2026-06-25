@@ -243,8 +243,8 @@ stories **directly into a real Jira project**:
 4. On the Results page, use **Push to Jira**. Re-pushing the same run is safe —
    issues already created are skipped, never duplicated.
 
-You can also set Jira defaults globally in secrets (`JIRA_ENABLED`,
-`JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`), but per-user
+You can also set Jira defaults globally in secrets (`JIRA_BASE_URL`,
+`JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`), but per-user
 connection from Settings is the recommended path for a team.
 
 ---
@@ -271,7 +271,6 @@ annotated list is in `ai-pm/.env.example`.
 | `APP_BASE_URL` | Public app URL (used in reset emails). | — |
 | `SEED_ADMIN_USERNAME` / `_EMAIL` / `_PASSWORD` | Auto-create the first admin. | — |
 | `RESEND_API_KEY` / `EMAIL_FROM` | Password-reset emails. | — |
-| `HITL_ENABLED` | `true` pauses for framework review. | `false` |
 | `JIRA_*` | Global Jira defaults (per-user Settings is preferred). | off |
 
 > **Never commit real secrets.** `.env` and `.streamlit/secrets.toml` are
